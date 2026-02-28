@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3DGS Viewer – Quest 3</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #111; }
+    #overlay {
+      position: fixed; top: 12px; left: 12px; right: 12px; z-index: 10;
+      background: rgba(0,0,0,0.6); color: #fff; padding: 10px 14px;
+      border-radius: 10px; backdrop-filter: blur(6px); font-family: system-ui, sans-serif;
+    }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    #status { margin-top: 8px; font-size: 12px; opacity: 0.9; }
+    #vr-btn {
+      padding: 8px 16px; background: #4a90d9; color: #fff; border: none;
+      border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: bold;
+    }
+    #vr-btn:disabled { background: #555; cursor: not-allowed; }
+    #vr-btn.active { background: #e05c5c; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div class="row">
+      <input id="file" type="file" accept=".ply,.spz,.splat,.ksplat,.sog,.rad" />
+      <button id="load-sample">サンプル読込</button>
+      <button id="vr-btn" disabled>VR非対応</button>
+    </div>
+    <div id="status">Ready.</div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js",
+      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/preview/2.0.0/spark.module.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { SparkRenderer, SplatMesh, SplatFileType } from "@sparkjsdev/spark";
+    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js";
+    import { VRButton } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/webxr/VRButton.js";
+    import { XRControllerModelFactory } from "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/webxr/XRControllerModelFactory.js";
+
+    const status = document.getElementById("status");
+    const vrBtn  = document.getElementById("vr-btn");
+
+    // ─── Scene / Camera / Renderer ───────────────────────────────
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x101214);
+
+    const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.01, 5000);
+    camera.position.set(0, 1.6, 3);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    // ─── Orbit Controls（非VR時） ─────────────────────────────────
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 1.0, 0);
+    controls.update();
+
+    // ─── Spark Renderer ───────────────────────────────────────────
+    const spark = new SparkRenderer({ renderer });
+    scene.add(spark);
+
+    // グリッド
+    scene.add(new THREE.GridHelper(10, 20, 0x2a2a2a, 0x1f1f1f));
+
+    // ─── VR対応チェック ───────────────────────────────────────────
+    if (navigator.xr) {
+      navigator.xr.isSessionSupported("immersive-vr").then(supported => {
+        if (supported) {
+          vrBtn.textContent = "Enter VR";
+          vrBtn.disabled = false;
+          vrBtn.addEventListener("click", toggleVR);
+          status.textContent = "VR対応デバイスを検出しました。";
+        } else {
+          vrBtn.textContent = "VR非対応";
+          status.textContent = "このデバイスはimmersive-VRに非対応です。";
+        }
+      });
+    }
+
+    // ─── VR セッション管理 ────────────────────────────────────────
+    let vrSession = null;
+
+    async function toggleVR() {
+      if (vrSession) {
+        await vrSession.end();
+        return;
+      }
+      try {
+        vrSession = await navigator.xr.requestSession("immersive-vr", {
+          optionalFeatures: ["local-floor", "bounded-floor", "hand-tracking"]
+        });
+        renderer.xr.setSession(vrSession);
+        vrBtn.textContent = "Exit VR";
+        vrBtn.classList.add("active");
+        controls.enabled = false;
+        vrSession.addEventListener("end", () => {
+          vrSession = null;
+          vrBtn.textContent = "Enter VR";
+          vrBtn.classList.remove("active");
+          controls.enabled = true;
+        });
+      } catch (e) {
+        status.textContent = "VR開始失敗: " + e.message;
+      }
+    }
+
+    // ─── コントローラー設定（テレポート） ─────────────────────────
+    const controllerModelFactory = new XRControllerModelFactory();
+    const raycasterVR = new THREE.Raycaster();
+
+    // フロア（テレポート対象）
+    const floorGeom = new THREE.PlaneGeometry(20, 20);
+    const floorMat  = new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide });
+    const floor = new THREE.Mesh(floorGeom, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    scene.add(floor);
+
+    // テレポートマーカー
+    const markerGeom = new THREE.RingGeometry(0.1, 0.15, 32);
+    const markerMat  = new THREE.MeshBasicMaterial({ color: 0x00ffaa, side: THREE.DoubleSide });
+    const teleportMarker = new THREE.Mesh(markerGeom, markerMat);
+    teleportMarker.rotation.x = -Math.PI / 2;
+    teleportMarker.visible = false;
+    scene.add(teleportMarker);
+
+    // コントローラーごとの設定
+    [0, 1].forEach(i => {
+      const controller = renderer.xr.getController(i);
+      scene.add(controller);
+
+      // レーザーポインター
+      const laserGeom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)
+      ]);
+      const laserMat = new THREE.LineBasicMaterial({ color: 0xffffff });
+      const laser = new THREE.Line(laserGeom, laserMat);
+      laser.scale.z = 5;
+      controller.add(laser);
+
+      // グリップ（コントローラーモデル）
+      const grip = renderer.xr.getControllerGrip(i);
+      grip.add(controllerModelFactory.createControllerModel(grip));
+      scene.add(grip);
+
+      // selectstart → テレポート
+      controller.addEventListener("selectstart", () => {
+        if (teleportMarker.visible) {
+          const pos = teleportMarker.position;
+          // XR Reference Spaceのオフセットで移動
+          const xrCam = renderer.xr.getCamera();
+          const offsetX = pos.x - xrCam.position.x;
+          const offsetZ = pos.z - xrCam.position.z;
+          xrCam.position.x += offsetX;
+          xrCam.position.z += offsetZ;
+        }
+      });
+    });
+
+    // VR中のレイキャスト更新
+    function updateVRRaycasting() {
+      const xrCam = renderer.xr.getCamera();
+      for (let i = 0; i < 2; i++) {
+        const ctrl = renderer.xr.getController(i);
+        const tempMat = new THREE.Matrix4().identity().extractRotation(ctrl.matrixWorld);
+        raycasterVR.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
+        raycasterVR.ray.direction.set(0, 0, -1).applyMatrix4(tempMat);
+        const hits = raycasterVR.intersectObject(floor);
+        if (hits.length > 0) {
+          teleportMarker.visible = true;
+          teleportMarker.position.copy(hits[0].point);
+          return;
+        }
+      }
+      teleportMarker.visible = false;
+    }
+
+    // ─── Splat 管理 ───────────────────────────────────────────────
+    let currentSplat = null;
+
+    function disposeCurrentSplat() {
+      if (!currentSplat) return;
+      scene.remove(currentSplat);
+      currentSplat.dispose?.();
+      currentSplat = null;
+    }
+
+    function getSplatOptions(fileName, buf) {
+      const ext = fileName.split('.').pop().toLowerCase();
+      const isSplatType = ext === "splat" || ext === "ksplat";
+      const opts = {
+        fileBytes: buf,
+        fileName,
+        lod: !isSplatType,
+      };
+      if (ext === "splat")  opts.fileType = SplatFileType.SPLAT;
+      if (ext === "ksplat") opts.fileType = SplatFileType.KSPLAT;
+      return opts;
+    }
+
+    async function loadUrl(url) {
+      disposeCurrentSplat();
+      status.textContent = "Loading...";
+      try {
+        const splat = new SplatMesh({ url, lod: true });
+        splat.rotation.x = Math.PI;
+        scene.add(splat);
+        currentSplat = splat;
+        await splat.initialized;
+        status.textContent = "Loaded ✓";
+      } catch (e) {
+        status.textContent = "Error: " + (e?.message ?? e);
+      }
+    }
+
+    async function loadFile(file) {
+      disposeCurrentSplat();
+      status.textContent = `Reading ${file.name}...`;
+      try {
+        const buf = await file.arrayBuffer();
+        const opts = getSplatOptions(file.name, buf);
+        const splat = new SplatMesh(opts);
+        splat.rotation.x = Math.PI;
+        scene.add(splat);
+        currentSplat = splat;
+        await splat.initialized;
+        status.textContent = "Loaded ✓";
+      } catch (e) {
+        status.textContent = "Error: " + (e?.message ?? e);
+      }
+    }
+
+    window.loadUrl = loadUrl;
+
+    document.getElementById("file").addEventListener("change", async e => {
+      const file = e.target.files?.[0];
+      if (file) await loadFile(file);
+    });
+
+    document.getElementById("load-sample").addEventListener("click", () => {
+      loadUrl("https://sparkjs.dev/assets/splats/butterfly.spz");
+    });
+
+    // ─── リサイズ ─────────────────────────────────────────────────
+    window.addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    // ─── メインループ ─────────────────────────────────────────────
+    renderer.setAnimationLoop(() => {
+      if (renderer.xr.isPresenting) {
+        updateVRRaycasting();
+      } else {
+        controls.update();
+      }
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>
