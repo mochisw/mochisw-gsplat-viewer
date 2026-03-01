@@ -198,24 +198,11 @@
       currentSplat = null;
     }
 
-    function getSplatOptions(fileName, buf) {
-      const ext = fileName.split('.').pop().toLowerCase();
-      const isSplatType = ext === "splat" || ext === "ksplat";
-      const opts = {
-        fileBytes: buf,
-        fileName,
-        lod: !isSplatType,
-      };
-      if (ext === "splat")  opts.fileType = SplatFileType.SPLAT;
-      if (ext === "ksplat") opts.fileType = SplatFileType.KSPLAT;
-      return opts;
-    }
-
     async function loadUrl(url) {
       disposeCurrentSplat();
       status.textContent = "Loading...";
       try {
-        const splat = new SplatMesh({ url, lod: true });
+        const splat = new SplatMesh({ url });
         splat.rotation.x = Math.PI;
         scene.add(splat);
         currentSplat = splat;
@@ -231,7 +218,11 @@
       status.textContent = `Reading ${file.name}...`;
       try {
         const buf = await file.arrayBuffer();
-        const opts = getSplatOptions(file.name, buf);
+        const ext = file.name.split('.').pop().toLowerCase();
+        const opts = { fileBytes: buf };
+        // .splat/.ksplat は自動検出不可のため明示指定
+        if (ext === "splat")  opts.fileType = SplatFileType.SPLAT;
+        if (ext === "ksplat") opts.fileType = SplatFileType.KSPLAT;
         const splat = new SplatMesh(opts);
         splat.rotation.x = Math.PI;
         scene.add(splat);
