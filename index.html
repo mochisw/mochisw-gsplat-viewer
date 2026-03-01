@@ -216,13 +216,16 @@
     async function loadFile(file) {
       disposeCurrentSplat();
       status.textContent = `Reading ${file.name}...`;
+      const ext = file.name.split('.').pop().toLowerCase();
       try {
-        const buf = await file.arrayBuffer();
-        const ext = file.name.split('.').pop().toLowerCase();
-        const opts = { fileBytes: buf };
-        // .splat/.ksplat は自動検出不可のため明示指定
-        if (ext === "splat")  opts.fileType = SplatFileType.SPLAT;
-        if (ext === "ksplat") opts.fileType = SplatFileType.KSPLAT;
+        const fileBytes = await file.arrayBuffer();
+        // SplatFileType の実値（Spark 2.0）: PLY="ply", SPZ="spz", SPLAT="splat", KSPLAT="ksplat", RAD="rad"
+        const opts = { fileBytes };
+        if (ext === "ply")    opts.fileType = "ply";
+        if (ext === "spz")    opts.fileType = "spz";
+        if (ext === "splat")  opts.fileType = "splat";
+        if (ext === "ksplat") opts.fileType = "ksplat";
+        if (ext === "rad")    opts.fileType = "rad";
         const splat = new SplatMesh(opts);
         splat.rotation.x = Math.PI;
         scene.add(splat);
