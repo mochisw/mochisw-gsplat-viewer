@@ -7,6 +7,8 @@ import {
   buildAsciiPointCloudPly,
   buildBinaryPointCloudPly,
   buildBinary3dgsPly,
+  buildSpzLegacy,
+  buildSpzV4,
   randomRgbPoints,
 } from "./fixtures.mjs";
 
@@ -50,7 +52,31 @@ writeFileSync(
   new Uint8Array(buildBinary3dgsPly(splats, { shDegree: 1 }))
 );
 
+// SPZ: 同じ格子ガウシアンをSPZ空間の値に変換(SPZはY上なのでY,Z反転)
+const spzGaussians = splats.map((s) => ({
+  x: s.x, y: -s.y, z: -s.z,
+  alpha: 1 / (1 + Math.exp(-s.opacity)),
+  dc: s.dc,
+  scale: s.scale,
+  rot: [0, 0, 0, 1],
+}));
+writeFileSync(
+  "fixtures/grid-v2.spz",
+  new Uint8Array(await buildSpzLegacy(spzGaussians, { version: 2, shDegree: 1 }))
+);
+writeFileSync(
+  "fixtures/grid-v3.spz",
+  new Uint8Array(await buildSpzLegacy(spzGaussians, { version: 3, shDegree: 1 }))
+);
+writeFileSync(
+  "fixtures/grid-v4.spz",
+  new Uint8Array(await buildSpzV4(spzGaussians, { shDegree: 1 }))
+);
+
 console.log("fixtures/ に書き出しました:");
 console.log("  sphere-binary.ply      (RGB点群 binary_little_endian, 10万点)");
 console.log("  sphere-ascii-small.ply (RGB点群 ascii, 5千点)");
 console.log("  grid-3dgs.ply          (3DGS標準 binary, 1万点, SH1)");
+console.log("  grid-v2.spz            (SPZ legacy gzip v2, 1万点)");
+console.log("  grid-v3.spz            (SPZ legacy gzip v3 smallest-three, 1万点)");
+console.log("  grid-v4.spz            (SPZ v4 ZSTD, 1万点)");

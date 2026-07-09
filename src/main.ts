@@ -2,6 +2,7 @@
  * アプリ本体: キャンバス初期化、ファイル読込、UI配線、描画ループ
  */
 import { parsePly } from "./ply";
+import { parseSpz } from "./spz";
 import { SplatData } from "./types";
 import { OrbitCamera, attachCameraControls } from "./camera";
 import { PointRenderer } from "./pointRenderer";
@@ -120,13 +121,14 @@ async function loadFile(file: File): Promise<void> {
   progressEl.classList.add("visible");
   try {
     const data = await file.arrayBuffer();
+    const onProgress = (done: number, total: number) => {
+      progressFill.style.width = `${Math.round((done / total) * 100)}%`;
+    };
     let parsed: SplatData;
     if (ext === "ply") {
-      parsed = await parsePly(data, (done, total) => {
-        progressFill.style.width = `${Math.round((done / total) * 100)}%`;
-      });
+      parsed = await parsePly(data, onProgress);
     } else if (ext === "spz") {
-      throw new Error("SPZはPhase 2で対応予定です");
+      parsed = await parseSpz(data, onProgress);
     } else {
       throw new Error(`未対応の拡張子です: .${ext}`);
     }
@@ -136,14 +138,15 @@ async function loadFile(file: File): Promise<void> {
     camera.fitToBounds(parsed.bounds.min, parsed.bounds.max);
     pointRenderer.refDistance = camera.distance;
 
-    // 3DGSデータはY下向き規約が多いのでデフォルトで上下反転をON
+    // 3DGS PLYはY下向き規約が多いのでデフォルトで上下反転をON。
+    // SPZはRUB(Y上)なので反転不要
     flipY = parsed.format === "ply-3dgs";
     ($("flip-y") as HTMLInputElement).checked = flipY;
 
     infoEl.innerHTML = [
       escapeHtml(file.name),
       `${parsed.numPoints.toLocaleString()} 点 · ${FORMAT_LABELS[parsed.format]}`,
-      parsed.format === "ply-3dgs" ? `SH次数 ${parsed.shDegree}` : null,
+      parsed.format !== "ply-points" ? `SH次数 ${parsed.shDegree}` : null,
     ].filter(Boolean).join("<br>");
     emptyHint.style.display = "none";
   } catch (err) {

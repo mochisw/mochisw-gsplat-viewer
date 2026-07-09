@@ -180,6 +180,141 @@ export function buildBigEndianPly() {
   return concat([enc.encode(header), new ArrayBuffer(12)]);
 }
 
+// ─────────────────────────────────────────────────────────────
+// SPZフィクスチャ(公式 nianticlabs/spz のパック処理を模倣)
+// テスト・手動確認用。値は「デコード後の空間」で与える:
+//   position: ワールド座標 / alpha: 0..1(sigmoid適用済) / dc: f_dc係数
+//   scale: log値(exp適用前) / rot: 正規化クォータニオン(x,y,z,w)
+// ─────────────────────────────────────────────────────────────
+
+const SPZ_COLOR_SCALE = 0.15;
+const SPZ_DIM_FOR_DEGREE = [0, 3, 8, 15, 24];
+
+const clampByte = (x) => Math.max(0, Math.min(255, Math.round(x)));
+
+function packPosition24(view, offset, v, fractionalBits) {
+  let fixed = Math.round(v * (1 << fractionalBits));
+  if (fixed < 0) fixed += 0x1000000;
+  view.setUint8(offset, fixed & 0xff);
+  view.setUint8(offset + 1, (fixed >> 8) & 0xff);
+  view.setUint8(offset + 2, (fixed >> 16) & 0xff);
+}
+
+/** smallest-three符号化(公式v3+)。qは(x,y,z,w) */
+export function packQuaternionSmallestThree(q) {
+  let largest = 0;
+  for (let i = 1; i < 4; i++) if (Math.abs(q[i]) > Math.abs(q[largest])) largest = i;
+  const sign = q[largest] < 0 ? -1 : 1;
+  let comp = largest * 2 ** 30;
+  let shift = 0;
+  for (let i = 3; i >= 0; i--) {
+    if (i === largest) continue;
+    const v = q[i] * sign;
+    const neg = v < 0 ? 1 : 0;
+    const mag = Math.min(511, Math.round((Math.abs(v) / Math.SQRT1_2) * 511));
+    comp += (neg * 512 + mag) * 2 ** shift;
+    shift += 10;
+  }
+  return comp >>> 0;
+}
+
+/**
+ * SPZの「gzip展開前の生ペイロード」を構築(ヘッダ+属性ストリーム連結)
+ * @param {{x,y,z,alpha,dc:[number,number,number],scale:[number,number,number],rot:[number,number,number,number]}[]} gaussians
+ */
+export function buildSpzPayload(gaussians, { version = 2, shDegree = 0, fractionalBits = 12, flags = 0 } = {}) {
+  const n = gaussians.length;
+  const shDim = SPZ_DIM_FOR_DEGREE[shDegree];
+  const rotBytes = version >= 3 ? 4 : 3;
+  const total = 16 + n * 9 + n + n * 3 + n * 3 + n * rotBytes + n * shDim * 3;
+  const buf = new ArrayBuffer(total);
+  const view = new DataView(buf);
+  const u8 = new Uint8Array(buf);
+
+  view.setUint32(0, 0x5053474e, true); // NGSP
+  view.setUint32(4, version, true);
+  view.setUint32(8, n, true);
+  view.setUint8(12, shDegree);
+  view.setUint8(13, fractionalBits);
+  view.setUint8(14, flags);
+
+  let o = 16;
+  for (const g of gaussians) {
+    packPosition24(view, o, g.x, fractionalBits);
+    packPosition24(view, o + 3, g.y, fractionalBits);
+    packPosition24(view, o + 6, g.z, fractionalBits);
+    o += 9;
+  }
+  for (const g of gaussians) u8[o++] = clampByte(g.alpha * 255);
+  for (const g of gaussians) {
+    for (let k = 0; k < 3; k++) u8[o++] = clampByte((g.dc[k] * SPZ_COLOR_SCALE + 0.5) * 255);
+  }
+  for (const g of gaussians) {
+    for (let k = 0; k < 3; k++) u8[o++] = clampByte((g.scale[k] + 10) * 16);
+  }
+  for (const g of gaussians) {
+    // w<0なら全体を反転(qと-qは同じ回転)
+    const q = g.rot[3] < 0 ? g.rot.map((v) => -v) : g.rot;
+    if (version >= 3) {
+      view.setUint32(o, packQuaternionSmallestThree(q), true);
+      o += 4;
+    } else {
+      for (let k = 0; k < 3; k++) u8[o++] = clampByte((q[k] + 1) * 127.5);
+    }
+  }
+  // SH係数は0(=バイト値128)で埋める
+  u8.fill(128, o, o + n * shDim * 3);
+  return buf;
+}
+
+/** レガシーgzip形式のSPZファイル(version 1〜3) */
+export async function buildSpzLegacy(gaussians, opts = {}) {
+  const { gzipSync } = await import("node:zlib");
+  const payload = buildSpzPayload(gaussians, opts);
+  const gz = gzipSync(new Uint8Array(payload));
+  // Bufferはプール共有のため.bufferを直接返さず正確な範囲をコピーする
+  return gz.buffer.slice(gz.byteOffset, gz.byteOffset + gz.byteLength);
+}
+
+/** version 4(NGSP平文ヘッダ + TOC + 属性別ZSTDストリーム)のSPZファイル */
+export async function buildSpzV4(gaussians, { shDegree = 0, fractionalBits = 12, flags = 0 } = {}) {
+  const { zstdCompressSync } = await import("node:zlib");
+  // レガシーペイロードの構築ロジックを流用してv3(smallest-three)の各ストリームを切り出す
+  const payload = new Uint8Array(buildSpzPayload(gaussians, { version: 3, shDegree, fractionalBits, flags }));
+  const n = gaussians.length;
+  const shDim = SPZ_DIM_FOR_DEGREE[shDegree];
+  const sizes = [n * 9, n, n * 3, n * 3, n * 4, n * shDim * 3].filter((s) => s > 0);
+  const streams = [];
+  let o = 16;
+  for (const size of sizes) {
+    streams.push(payload.subarray(o, o + size));
+    o += size;
+  }
+  const compressed = streams.map((s) => zstdCompressSync(s));
+
+  const tocByteOffset = 32;
+  const totalSize =
+    tocByteOffset + streams.length * 16 + compressed.reduce((a, c) => a + c.length, 0);
+  const out = new Uint8Array(totalSize);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, 0x5053474e, true);
+  view.setUint32(4, 4, true);
+  view.setUint32(8, n, true);
+  view.setUint8(12, shDegree);
+  view.setUint8(13, fractionalBits);
+  view.setUint8(14, flags);
+  view.setUint8(15, streams.length);
+  view.setUint32(16, tocByteOffset, true);
+  let dataOffset = tocByteOffset + streams.length * 16;
+  for (let i = 0; i < streams.length; i++) {
+    view.setBigUint64(tocByteOffset + i * 16, BigInt(compressed[i].length), true);
+    view.setBigUint64(tocByteOffset + i * 16 + 8, BigInt(streams[i].length), true);
+    out.set(compressed[i], dataOffset);
+    dataOffset += compressed[i].length;
+  }
+  return out.buffer;
+}
+
 /** ランダムなRGB点群を生成 */
 export function randomRgbPoints(n, seed = 12345) {
   let s = seed;

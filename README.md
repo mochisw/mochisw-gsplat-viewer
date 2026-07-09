@@ -20,7 +20,7 @@ npm run build      # 型チェック + 単一HTMLビルド → dist/index.html
 ## 実装状況
 
 - [x] **Phase 1**: 骨格 + PLYパーサ(3DGS標準 / RGB点群、ascii / binary_little_endian)+ 点表示 + orbit/pan/zoom操作 + D&D読込
-- [ ] **Phase 2**: SPZパーサ
+- [x] **Phase 2**: SPZパーサ(レガシーgzip v2/v3対応。v4はZSTD圧縮のため `DecompressionStream('zstd')` 対応ブラウザのみ、非対応環境では明示エラー)
 - [ ] **Phase 3**: ガウシアンスプラッティング + Workerデプスソート
 - [ ] **Phase 4**: 仕上げ(XGRIDSスキップ、iPhone Safari実機確認)
 

@@ -50,10 +50,22 @@ SPZ / PLY を読み込める**ブラウザ完結・ゼロコスト・インス�
 未知のpropertyは読み飛ばす。
 
 ### 3.2 SPZ(Niantic)
-- magic `NGSP`、gzip圧縮。ヘッダにversion / numPoints / shDegree / fractionalBits / flags
-- 位置: 24bit固定小数点、回転: smallest-three系の圧縮表現、scale: log符号化8bit、色/α: 8bit
-- ⚠️ **要確認(推測で実装しない)**: 正確なバイトレイアウトは実装時に公式リポジトリ
-  `github.com/nianticlabs/spz` を参照して確定させること。
+
+✅ **確定済み(Phase 2)**: 公式リポジトリ `github.com/nianticlabs/spz` の
+`src/cc/load-spz.cc` / `splat-utils.h` / `README.md`(2026-07-09時点main)で以下を確認した。
+
+- 形式判定: 先頭 `1f 8b` → レガシーgzip(v1〜3)/ 先頭 `NGSP` → v4(**ZSTD圧縮**)
+  - 設計当初の「gzip」前提はレガシー形式のみ。v4はZSTDで、ブラウザ標準APIでは
+    `DecompressionStream('zstd')` 対応環境(Chrome系)のみ展開可能 → 非対応環境では明示エラー
+- レガシー: gzip展開後、16Bヘッダ(magic/version/numPoints/shDegree/fractionalBits/flags)+
+  属性ストリーム連結(positions → alphas → colors → scales → rotations → sh)
+- v4: 32B平文ヘッダ + TOC(ストリームごとの圧縮/非圧縮サイズ)+ 属性別ZSTDストリーム(同順)
+- デコード: 位置=24bit固定小数点(符号拡張, /2^fractionalBits)、α=u8(sigmoid適用済)、
+  色=f_dc復元 `(u8/255−0.5)/0.15`、scale=`exp(u8/16−10)`、
+  回転=v2: first-three(u8/127.5−1, w再構成)/ v3+: smallest-three(2bit最大成分index +
+  10bit×3, 最大成分が正になるよう符号正規化)、SH=`(u8−128)/128`
+- v1(float16位置)は未リリース形式のため非対応(明示エラー)
+- 座標系: SPZはRUB(Y上、OpenGL準拠)。PLY(3DGS標準, Y下)と異なり上下反転不要
 
 ### 3.3 XGRIDS対策(オプション)
 - XGRIDS出力SPZは先頭約10,242点が外れ値マーカー(過去実測)
@@ -118,7 +130,7 @@ SPZ / PLY を読み込める**ブラウザ完結・ゼロコスト・インス�
 
 ## 9. 未確定・要確認事項(推測禁止リスト)
 
-1. SPZの正確なバイトレイアウト → 実装時に公式リポジトリで確定(3.2参照)
+1. ~~SPZの正確なバイトレイアウト~~ → **確定済み**(3.2参照)
 2. XGRIDSスキップ点数の普遍性 → 手持ちファイル複数で実測してから既定値を確定
 3. .rad / .splat 対応 → 本設計では不明・スコープ外。需要が出たら別途ADR
 4. パースのWorker化要否 → Phase 3で実測して判断
