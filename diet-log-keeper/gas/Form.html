@@ -236,6 +236,7 @@
         document.getElementById('weight').value = '';
         document.getElementById('bodyfat').value = '';
         document.getElementById('note').value = '';
+        document.querySelectorAll('#condition input:checked').forEach(function (el) { el.checked = false; });
       })
       .withFailureHandler(function (err) {
         btn.disabled = false;
