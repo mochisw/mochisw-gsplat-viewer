@@ -37,9 +37,15 @@ export class OrbitCamera {
   }
 
   viewProjMatrix(aspect: number): Mat4 {
-    mat4Perspective(this.proj, (this.fovYDeg * Math.PI) / 180, aspect, this.near, this.far);
-    mat4LookAt(this.view, this.eye(), this.target, [0, 1, 0]);
-    return mat4Multiply(this.viewProj, this.proj, this.view);
+    return mat4Multiply(this.viewProj, this.projMatrix(aspect), this.viewMatrix());
+  }
+
+  projMatrix(aspect: number): Mat4 {
+    return mat4Perspective(this.proj, (this.fovYDeg * Math.PI) / 180, aspect, this.near, this.far);
+  }
+
+  viewMatrix(): Mat4 {
+    return mat4LookAt(this.view, this.eye(), this.target, [0, 1, 0]);
   }
 
   /** バウンディングボックスに合わせて位置をリセット */

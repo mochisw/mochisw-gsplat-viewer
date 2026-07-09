@@ -3,10 +3,12 @@
  */
 import { parsePly } from "./ply";
 import { parseSpz } from "./spz";
-import { SplatData } from "./types";
+import { SplatData, FLOATS_PER_POINT } from "./types";
 import { OrbitCamera, attachCameraControls } from "./camera";
 import { PointRenderer } from "./pointRenderer";
-import { mat4Identity } from "./math";
+import { SplatRenderer } from "./splatRenderer";
+import { mat4Identity, mat4Multiply } from "./math";
+import SortWorker from "./sortWorker?worker&inline";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const gl = canvas.getContext("webgl2", { antialias: false });
@@ -19,18 +21,75 @@ if (!gl) {
 const camera = new OrbitCamera();
 attachCameraControls(canvas, camera);
 const pointRenderer = new PointRenderer(gl);
+const splatRenderer = new SplatRenderer(gl);
 
 let scene: SplatData | null = null;
 let bgColor: [number, number, number] = [0, 0, 0];
 let pointSize = 2;
 let attenuation = true;
 let flipY = false;
+let mode: "points" | "splats" = "points";
+let splatScale = 1;
+
+// ─── デプスソートWorker(設計書4章: カメラ移動閾値超過時のみ再ソート) ───
+const sortWorker = new SortWorker();
+let sortInFlight = false;
+let sortQueued = false;
+let sortEpoch = 0;
+/** 前回ソート時の視線方向(view*modelのz行)。nullなら未ソート */
+let lastSortRowZ: [number, number, number] | null = null;
+/** 視線方向の変化がこの内積を下回ったら再ソート(≈1.1°) */
+const RESORT_DOT_THRESHOLD = 0.9998;
+
+sortWorker.onmessage = (e: MessageEvent<{ type: string; indices: Uint32Array; epoch: number }>) => {
+  if (e.data.type !== "sorted") return;
+  splatRenderer.updateSortOrder(e.data.indices);
+  sortInFlight = false;
+  if (sortQueued) {
+    sortQueued = false;
+    requestSort();
+  }
+};
+
+function currentRowZ(): [number, number, number] {
+  const vm = mat4Multiply(new Float32Array(16), camera.viewMatrix(), currentModel());
+  return [vm[2], vm[6], vm[10]];
+}
+
+function requestSort(): void {
+  if (!scene) return;
+  if (sortInFlight) {
+    sortQueued = true;
+    return;
+  }
+  const rowZ = currentRowZ();
+  lastSortRowZ = rowZ;
+  sortInFlight = true;
+  sortWorker.postMessage({ type: "sort", rowZ, epoch: ++sortEpoch });
+}
+
+/** 平行移動はz順序を変えないため、視線方向(回転)の変化だけを再ソート条件にする */
+function maybeResort(): void {
+  if (!scene || mode !== "splats") return;
+  if (!lastSortRowZ) {
+    requestSort();
+    return;
+  }
+  const r = currentRowZ();
+  const dot =
+    r[0] * lastSortRowZ[0] + r[1] * lastSortRowZ[1] + r[2] * lastSortRowZ[2];
+  if (dot < RESORT_DOT_THRESHOLD) requestSort();
+}
 
 // モデル行列: 3DGSデータは一般にY下向きのため上下反転(Y,Z符号反転)を適用
 const modelIdentity = mat4Identity();
 const modelFlipped = mat4Identity();
 modelFlipped[5] = -1;
 modelFlipped[10] = -1;
+
+function currentModel(): Float32Array {
+  return flipY ? modelFlipped : modelIdentity;
+}
 
 // ─── DPI対応リサイズ ───
 function resize(): void {
@@ -74,6 +133,22 @@ $("file-input").addEventListener("change", (e) => {
 ($("flip-y") as HTMLInputElement).addEventListener("change", (e) => {
   flipY = (e.target as HTMLInputElement).checked;
 });
+($("splat-scale") as HTMLInputElement).addEventListener("input", (e) => {
+  splatScale = parseFloat((e.target as HTMLInputElement).value);
+});
+
+// ─── モード切替(設計書4章: シェーダプログラムのみ切替、再アップロードなし) ───
+const modePointsBtn = $("mode-points") as HTMLButtonElement;
+const modeSplatsBtn = $("mode-splats") as HTMLButtonElement;
+
+function setMode(next: "points" | "splats"): void {
+  if (next === "splats" && modeSplatsBtn.disabled) return;
+  mode = next;
+  modePointsBtn.classList.toggle("active", mode === "points");
+  modeSplatsBtn.classList.toggle("active", mode === "splats");
+}
+modePointsBtn.addEventListener("click", () => setMode("points"));
+modeSplatsBtn.addEventListener("click", () => setMode("splats"));
 
 $("bg-black").addEventListener("click", () => {
   bgColor = [0, 0, 0];
@@ -135,8 +210,26 @@ async function loadFile(file: File): Promise<void> {
 
     scene = parsed;
     pointRenderer.setData(parsed);
+    splatRenderer.setData(parsed);
     camera.fitToBounds(parsed.bounds.min, parsed.bounds.max);
     pointRenderer.refDistance = camera.distance;
+
+    // Workerへ点座標を転送(ソート用にxyzのみ抽出)
+    const f32 = new Float32Array(parsed.buffer);
+    const positions = new Float32Array(parsed.numPoints * 3);
+    for (let i = 0; i < parsed.numPoints; i++) {
+      positions[i * 3] = f32[i * FLOATS_PER_POINT];
+      positions[i * 3 + 1] = f32[i * FLOATS_PER_POINT + 1];
+      positions[i * 3 + 2] = f32[i * FLOATS_PER_POINT + 2];
+    }
+    sortWorker.postMessage({ type: "data", positions: positions.buffer }, [positions.buffer]);
+    lastSortRowZ = null; // 次フレームで初回ソート
+
+    // ガウシアン属性を持たないRGB点群ではスプラットモードを無効化
+    const hasGaussians = parsed.format !== "ply-points";
+    modeSplatsBtn.disabled = !hasGaussians;
+    modeSplatsBtn.title = hasGaussians ? "" : "RGB点群にはガウシアン属性がありません";
+    if (!hasGaussians) setMode("points");
 
     // 3DGS PLYはY下向き規約が多いのでデフォルトで上下反転をON。
     // SPZはRUB(Y上)なので反転不要
@@ -172,12 +265,24 @@ function frame(now: number): void {
   gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT);
 
   if (scene) {
-    const viewProj = camera.viewProjMatrix(canvas.width / canvas.height);
-    pointRenderer.draw(viewProj, {
-      pointSize,
-      attenuation,
-      model: flipY ? modelFlipped : modelIdentity,
-    });
+    const aspect = canvas.width / canvas.height;
+    if (mode === "splats") {
+      maybeResort();
+      const viewModel = mat4Multiply(new Float32Array(16), camera.viewMatrix(), currentModel());
+      const focalPx = (0.5 * canvas.height) / Math.tan(((camera.fovYDeg / 2) * Math.PI) / 180);
+      splatRenderer.draw(viewModel, camera.projMatrix(aspect), {
+        splatScale,
+        focalPx,
+        viewportWidth: canvas.width,
+        viewportHeight: canvas.height,
+      });
+    } else {
+      pointRenderer.draw(camera.viewProjMatrix(aspect), {
+        pointSize,
+        attenuation,
+        model: currentModel(),
+      });
+    }
   }
 
   frameCount++;

@@ -4,17 +4,21 @@
  * 点表示・スプラット表示の両モードで同じGPUバッファを共有するため
  * (設計書4章)、interleaved な単一 ArrayBuffer に全属性を詰める。
  *
- * レイアウト(1点あたり STRIDE_BYTES = 44 バイト):
+ * レイアウト(1点あたり STRIDE_BYTES = 48 バイト):
  *   offset  0: position  float32 x3 (12B)
  *   offset 12: color     uint8   x4 (RGBA, 4B) — αは3DGSのopacity、点群は255
  *   offset 16: scale     float32 x3 (12B) — 線形値(exp適用済)。点群は0
- *   offset 28: rotation  float32 x4 (16B) — 正規化クォータニオン(w,x,y,z)。点群は(1,0,0,0)
+ *   offset 28: (パディング 4B)
+ *   offset 32: rotation  float32 x4 (16B) — 正規化クォータニオン(w,x,y,z)。点群は(1,0,0,0)
+ *
+ * 48B = RGBA32UIテクセル(16B)×3 に一致させてあり、スプラットモードでは
+ * このバッファを変換なしでデータテクスチャに直接アップロードできる。
  */
-export const STRIDE_BYTES = 44;
+export const STRIDE_BYTES = 48;
 export const OFFSET_POSITION = 0;
 export const OFFSET_COLOR = 12;
 export const OFFSET_SCALE = 16;
-export const OFFSET_ROTATION = 28;
+export const OFFSET_ROTATION = 32;
 
 export type SourceFormat = "ply-3dgs" | "ply-points" | "spz";
 

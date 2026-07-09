@@ -83,11 +83,15 @@
       </div>
       <div class="seg" id="mode-seg">
         <button id="mode-points" class="active">点</button>
-        <button id="mode-splats" disabled title="Phase 3で実装">スプラット</button>
+        <button id="mode-splats" disabled title="ファイル未読込">スプラット</button>
       </div>
       <div class="row">
         <label for="point-size">点サイズ</label>
         <input id="point-size" type="range" min="1" max="16" step="0.5" value="2" />
+      </div>
+      <div class="row">
+        <label for="splat-scale">スプラットスケール</label>
+        <input id="splat-scale" type="range" min="0.1" max="2" step="0.05" value="1" />
       </div>
       <div class="row">
         <label for="attenuation">距離減衰</label>
