@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Diet Log Keeper</title>
+<style>
+  :root {
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --line: #e1e0d9;
+    --accent: #2a78d6;
+    --accent-ink: #ffffff;
+    --danger: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --line: #2c2c2a;
+      --accent: #3987e5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 16px 48px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  main { max-width: 480px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  label.field { display: block; font-weight: 600; font-size: 14px; margin: 20px 0 8px; }
+  label.field .opt { font-weight: 400; color: var(--muted); }
+  input[type="date"], input[type="number"], textarea {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 18px;
+    font-family: inherit;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+  textarea { min-height: 72px; font-size: 16px; resize: vertical; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips input { position: absolute; opacity: 0; pointer-events: none; }
+  .chips span {
+    display: inline-block;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: 15px;
+    user-select: none;
+  }
+  .chips input:checked + span {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+  }
+  button.submit {
+    width: 100%;
+    margin-top: 28px;
+    padding: 15px;
+    font-size: 17px;
+    font-weight: 700;
+    font-family: inherit;
+    color: var(--accent-ink);
+    background: var(--accent);
+    border: none;
+    border-radius: 12px;
+  }
+  button.submit:disabled { opacity: 0.5; }
+  .error { color: var(--danger); font-size: 14px; margin-top: 12px; white-space: pre-wrap; }
+  .result {
+    margin-top: 24px;
+    padding: 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  .result h2 { font-size: 15px; margin: 0 0 10px; }
+  .result table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  .result td { padding: 3px 0; }
+  .result td:first-child { color: var(--muted); width: 7em; }
+  .result .comment { margin: 12px 0 0; font-size: 14px; color: var(--ink-2); }
+  .logline {
+    display: flex; gap: 8px; align-items: center; margin-top: 12px;
+  }
+  .logline code {
+    flex: 1;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  .logline button {
+    padding: 10px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Diet Log Keeper</h1>
+  <p class="sub">体重・体脂肪率を記録します（正本は Google Sheets）</p>
+
+  <form id="form">
+    <label class="field" for="date">date</label>
+    <input type="date" id="date" required>
+
+    <label class="field">timing</label>
+    <div class="chips" id="timing" role="radiogroup"></div>
+
+    <label class="field" for="weight">weight_kg</label>
+    <input type="number" id="weight" inputmode="decimal" step="0.1" min="20" max="300"
+           placeholder="65.2" required>
+
+    <label class="field" for="bodyfat">body_fat_percent</label>
+    <input type="number" id="bodyfat" inputmode="decimal" step="0.1" min="1" max="75"
+           placeholder="14.4" required>
+
+    <label class="field">condition <span class="opt">（任意・複数選択可）</span></label>
+    <div class="chips" id="condition"></div>
+
+    <label class="field" for="note">note <span class="opt">（任意）</span></label>
+    <textarea id="note" placeholder="自由記述"></textarea>
+
+    <button type="submit" class="submit" id="submitBtn">記録する</button>
+    <p class="error" id="error" hidden></p>
+  </form>
+
+  <section class="result" id="result" hidden>
+    <h2>記録しました</h2>
+    <table>
+      <tr><td>日付</td><td id="rDate"></td></tr>
+      <tr><td>体重</td><td id="rWeight"></td></tr>
+      <tr><td>体脂肪率</td><td id="rBodyFat"></td></tr>
+      <tr><td>前回比</td><td id="rDelta"></td></tr>
+      <tr><td>7件平均</td><td id="rAvg"></td></tr>
+    </table>
+    <p class="comment" id="rComment"></p>
+    <div class="logline">
+      <code id="rLogLine"></code>
+      <button type="button" id="copyBtn">コピー</button>
+    </div>
+  </section>
+</main>
+
+<script>
+  var TIMINGS = ['morning', 'before dinner', 'after dinner', 'after bath', 'before sleep', 'unknown'];
+  var CONDITIONS = ['normal', 'tired', 'poor sleep', 'travel', 'outing', 'drinking',
+                    'ate out', 'exercise', 'sick', 'stressed'];
+
+  function chip(name, value, type) {
+    var label = document.createElement('label');
+    var input = document.createElement('input');
+    input.type = type;
+    input.name = name;
+    input.value = value;
+    var span = document.createElement('span');
+    span.textContent = value;
+    label.appendChild(input);
+    label.appendChild(span);
+    return label;
+  }
+  TIMINGS.forEach(function (t) { document.getElementById('timing').appendChild(chip('timing', t, 'radio')); });
+  CONDITIONS.forEach(function (c) { document.getElementById('condition').appendChild(chip('condition', c, 'checkbox')); });
+  document.querySelector('#timing input').checked = true;
+
+  // date の初期値は今日（端末ローカル）
+  var now = new Date();
+  document.getElementById('date').value =
+    now.getFullYear() + '-' +
+    String(now.getMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getDate()).padStart(2, '0');
+
+  function signed(n, unit) {
+    if (n === null || n === undefined) return '—（初回）';
+    return (n > 0 ? '+' : '') + n.toFixed(2).replace(/0$/, '') + unit;
+  }
+
+  document.getElementById('form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var btn = document.getElementById('submitBtn');
+    var errEl = document.getElementById('error');
+    errEl.hidden = true;
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+
+    var payload = {
+      date: document.getElementById('date').value,
+      timing: document.querySelector('#timing input:checked').value,
+      weightKg: document.getElementById('weight').value,
+      bodyFatPercent: document.getElementById('bodyfat').value,
+      condition: Array.prototype.map.call(
+        document.querySelectorAll('#condition input:checked'),
+        function (el) { return el.value; }),
+      note: document.getElementById('note').value
+    };
+
+    google.script.run
+      .withSuccessHandler(function (r) {
+        btn.disabled = false;
+        btn.textContent = '記録する';
+        document.getElementById('rDate').textContent = r.date + '（' + r.timing + '）';
+        document.getElementById('rWeight').textContent = r.weightKg.toFixed(1) + ' kg';
+        document.getElementById('rBodyFat').textContent = r.bodyFatPercent.toFixed(1) + ' %';
+        document.getElementById('rDelta').textContent =
+          signed(r.weightDelta, 'kg') + ' / ' + signed(r.bodyFatDelta, '%');
+        document.getElementById('rAvg').textContent =
+          r.weightAvg.toFixed(2) + 'kg / ' + r.bodyFatAvg.toFixed(2) + '%' +
+          (r.avgCount < 7 ? '（' + r.avgCount + '件分）' : '');
+        document.getElementById('rComment').textContent = r.comment;
+        document.getElementById('rLogLine').textContent = r.logLine;
+        document.getElementById('result').hidden = false;
+        document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+        document.getElementById('weight').value = '';
+        document.getElementById('bodyfat').value = '';
+        document.getElementById('note').value = '';
+      })
+      .withFailureHandler(function (err) {
+        btn.disabled = false;
+        btn.textContent = '記録する';
+        errEl.textContent = '保存に失敗しました: ' + (err && err.message ? err.message : err);
+        errEl.hidden = false;
+      })
+      .saveLog(payload);
+  });
+
+  document.getElementById('copyBtn').addEventListener('click', function () {
+    var text = document.getElementById('rLogLine').textContent;
+    navigator.clipboard.writeText(text).then(function () {
+      document.getElementById('copyBtn').textContent = 'コピー済み';
+    });
+  });
+</script>
+</body>
+</html>

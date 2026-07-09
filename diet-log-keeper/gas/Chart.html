@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Diet Log Keeper — Charts</title>
+<style>
+  :root {
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --weight-actual: #2a78d6;   /* blue */
+    --weight-avg:    #eb6834;   /* orange */
+    --fat-actual:    #1baf7a;   /* teal/green */
+    --fat-avg:       #e87ba4;   /* magenta/pink */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --weight-actual: #3987e5;
+      --weight-avg:    #d95926;
+      --fat-actual:    #199e70;
+      --fat-avg:       #d55181;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 14px 48px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  .status { color: var(--muted); font-size: 14px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 16px 14px;
+    margin-bottom: 24px;
+  }
+  .card h2 { font-size: 18px; margin: 0 0 12px; }
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 24px;
+    margin-bottom: 6px;
+  }
+  .stats div { font-size: 13px; }
+  .stats .k { color: var(--muted); display: block; font-size: 11px; letter-spacing: 0.03em; }
+  .stats .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .legend {
+    display: flex;
+    gap: 18px;
+    font-size: 12px;
+    color: var(--ink-2);
+    margin: 10px 0 4px;
+  }
+  .legend i {
+    display: inline-block;
+    width: 14px;
+    height: 3px;
+    border-radius: 2px;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+  svg text { font-family: inherit; }
+  .tip {
+    position: fixed;
+    pointer-events: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.5;
+    display: none;
+    z-index: 10;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+<main>
+  <p class="status" id="status">Loading…</p>
+  <div id="charts"></div>
+</main>
+<div class="tip" id="tip"></div>
+
+<script>
+  var CHARTS = [
+    {
+      title: 'Weight Trend',
+      unit: 'kg',
+      actualKey: 'weight',
+      avgKey: 'weightAvg',
+      actualColor: 'var(--weight-actual)',
+      avgColor: 'var(--weight-avg)'
+    },
+    {
+      title: 'Body Fat Trend',
+      unit: '%',
+      actualKey: 'bodyFat',
+      avgKey: 'bodyFatAvg',
+      actualColor: 'var(--fat-actual)',
+      avgColor: 'var(--fat-avg)'
+    }
+  ];
+
+  google.script.run
+    .withSuccessHandler(function (data) {
+      var records = data.records || [];
+      if (records.length < 2) {
+        document.getElementById('status').textContent =
+          'Not enough data yet (' + records.length + ' record' + (records.length === 1 ? '' : 's') + ').';
+        return;
+      }
+      document.getElementById('status').hidden = true;
+      var root = document.getElementById('charts');
+      CHARTS.forEach(function (cfg) { root.appendChild(buildCard(cfg, records)); });
+    })
+    .withFailureHandler(function (err) {
+      document.getElementById('status').textContent =
+        'Failed to load: ' + (err && err.message ? err.message : err);
+    })
+    .getChartData();
+
+  function el(tag, attrs, text) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var node = document.createElementNS(ns, tag);
+    for (var k in attrs) node.setAttribute(k, attrs[k]);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function fmt(n, unit) { return n.toFixed(1) + (unit || ''); }
+
+  function signed(n, unit) { return (n > 0 ? '+' : n < 0 ? '−' : '±') + Math.abs(n).toFixed(1) + unit; }
+
+  function shortDate(iso) {
+    var m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var p = iso.split('-');
+    return m[Number(p[1]) - 1] + ' ' + Number(p[2]);
+  }
+
+  function niceStep(span, targetTicks) {
+    var raw = span / targetTicks;
+    var mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    var candidates = [1, 2, 2.5, 5, 10];
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i] * mag >= raw) return candidates[i] * mag;
+    }
+    return 10 * mag;
+  }
+
+  function buildCard(cfg, records) {
+    var actual = records.map(function (r) { return r[cfg.actualKey]; });
+    var avg = records.map(function (r) { return r[cfg.avgKey]; });
+    var n = records.length;
+    var first = actual[0];
+    var latest = actual[n - 1];
+    var minV = Math.min.apply(null, actual);
+    var maxV = Math.max.apply(null, actual);
+    var minIdx = actual.indexOf(minV);
+    var maxIdx = actual.indexOf(maxV);
+
+    var card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML =
+      '<h2>' + cfg.title + '</h2>' +
+      '<div class="stats">' +
+        stat('PERIOD', records[0].date + ' – ' + records[n - 1].date + ' (' + n + ' records)') +
+        stat('START', fmt(first, ' ' + cfg.unit)) +
+        stat('LATEST', fmt(latest, ' ' + cfg.unit)) +
+        stat('CHANGE', signed(latest - first, ' ' + cfg.unit)) +
+      '</div>' +
+      '<div class="legend">' +
+        '<span><i style="background:' + cfg.actualColor + '"></i>Actual</span>' +
+        '<span><i style="background:' + cfg.avgColor + '"></i>7-record average</span>' +
+      '</div>';
+
+    // ---- geometry -------------------------------------------------------
+    var W = 640, H = 320;
+    var m = { top: 26, right: 18, bottom: 34, left: 46 };
+    var pw = W - m.left - m.right;
+    var ph = H - m.top - m.bottom;
+
+    var times = records.map(function (r) { return new Date(r.date + 'T00:00:00').getTime(); });
+    var t0 = times[0], t1 = times[n - 1];
+    if (t1 === t0) t1 = t0 + 1;
+
+    var all = actual.concat(avg.filter(function (v) { return v !== null; }));
+    var lo = Math.min.apply(null, all);
+    var hi = Math.max.apply(null, all);
+    var pad = Math.max((hi - lo) * 0.12, 0.4);
+    lo -= pad; hi += pad;
+    var step = niceStep(hi - lo, 4);
+    var y0 = Math.floor(lo / step) * step;
+    var y1 = Math.ceil(hi / step) * step;
+
+    function X(t) { return m.left + (t - t0) / (t1 - t0) * pw; }
+    function Y(v) { return m.top + (y1 - v) / (y1 - y0) * ph; }
+
+    var svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': cfg.title });
+
+    // gridlines + y labels
+    for (var v = y0; v <= y1 + step / 2; v += step) {
+      var y = Y(v);
+      svg.appendChild(el('line', { x1: m.left, x2: W - m.right, y1: y, y2: y, stroke: 'var(--grid)', 'stroke-width': 1 }));
+      svg.appendChild(el('text', { x: m.left - 8, y: y + 4, 'text-anchor': 'end', 'font-size': 11, fill: 'var(--muted)' },
+        step < 1 ? v.toFixed(1) : String(Math.round(v))));
+    }
+    // baseline
+    svg.appendChild(el('line', { x1: m.left, x2: W - m.right, y1: m.top + ph, y2: m.top + ph, stroke: 'var(--axis)', 'stroke-width': 1 }));
+
+    // x labels: first / ~1/3 / ~2/3 / last
+    [0, Math.round((n - 1) / 3), Math.round(2 * (n - 1) / 3), n - 1]
+      .filter(function (i, k, arr) { return arr.indexOf(i) === k; })
+      .forEach(function (i, k, arr) {
+        var anchor = k === 0 ? 'start' : k === arr.length - 1 ? 'end' : 'middle';
+        svg.appendChild(el('text', { x: X(times[i]), y: H - 12, 'text-anchor': anchor, 'font-size': 11, fill: 'var(--muted)' },
+          shortDate(records[i].date)));
+      });
+
+    // series paths
+    function path(values, color, width) {
+      var d = '';
+      values.forEach(function (v, i) {
+        if (v === null) return;
+        d += (d ? 'L' : 'M') + X(times[i]).toFixed(1) + ',' + Y(v).toFixed(1);
+      });
+      return el('path', { d: d, fill: 'none', stroke: color, 'stroke-width': width, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' });
+    }
+    svg.appendChild(path(avg, cfg.avgColor, 2.5));
+    svg.appendChild(path(actual, cfg.actualColor, 2));
+
+    // annotations: latest / min / max only (dedup when they coincide)
+    var marks = {};
+    marks[maxIdx] = { label: 'High ' + fmt(maxV, cfg.unit), above: true };
+    marks[minIdx] = { label: 'Low ' + fmt(minV, cfg.unit), above: false };
+    marks[n - 1] = { label: fmt(latest, cfg.unit), above: actual[n - 1] - y0 < (y1 - y0) / 2 };
+    Object.keys(marks).forEach(function (idx) {
+      idx = Number(idx);
+      var mk = marks[idx];
+      var x = X(times[idx]), y = Y(actual[idx]);
+      svg.appendChild(el('circle', { cx: x, cy: y, r: 4, fill: cfg.actualColor, stroke: 'var(--surface)', 'stroke-width': 2 }));
+      var anchor = x > W - m.right - 60 ? 'end' : x < m.left + 40 ? 'start' : 'middle';
+      svg.appendChild(el('text', {
+        x: x, y: mk.above ? y - 10 : y + 18,
+        'text-anchor': anchor, 'font-size': 11, 'font-weight': 600, fill: 'var(--ink-2)'
+      }, mk.label));
+    });
+
+    // hover / touch crosshair + tooltip
+    var cross = el('line', { y1: m.top, y2: m.top + ph, stroke: 'var(--axis)', 'stroke-width': 1, 'stroke-dasharray': '3 3', visibility: 'hidden' });
+    var dotA = el('circle', { r: 4.5, fill: cfg.actualColor, stroke: 'var(--surface)', 'stroke-width': 2, visibility: 'hidden' });
+    var dotB = el('circle', { r: 4.5, fill: cfg.avgColor, stroke: 'var(--surface)', 'stroke-width': 2, visibility: 'hidden' });
+    svg.appendChild(cross); svg.appendChild(dotA); svg.appendChild(dotB);
+
+    var tip = document.getElementById('tip');
+    svg.addEventListener('pointermove', function (ev) {
+      var rect = svg.getBoundingClientRect();
+      var t = t0 + ((ev.clientX - rect.left) / rect.width * W - m.left) / pw * (t1 - t0);
+      var best = 0, bd = Infinity;
+      times.forEach(function (ti, i) { var d = Math.abs(ti - t); if (d < bd) { bd = d; best = i; } });
+      var x = X(times[best]);
+      cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
+      dotA.setAttribute('cx', x); dotA.setAttribute('cy', Y(actual[best])); dotA.setAttribute('visibility', 'visible');
+      if (avg[best] !== null) {
+        dotB.setAttribute('cx', x); dotB.setAttribute('cy', Y(avg[best])); dotB.setAttribute('visibility', 'visible');
+      } else {
+        dotB.setAttribute('visibility', 'hidden');
+      }
+      tip.innerHTML = '<strong>' + records[best].date + '</strong><br>' +
+        'Actual: ' + fmt(actual[best], cfg.unit) +
+        (avg[best] !== null ? '<br>7-rec avg: ' + fmt(avg[best], cfg.unit) : '');
+      tip.style.display = 'block';
+      var tx = Math.min(ev.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+      tip.style.left = tx + 'px';
+      tip.style.top = (rect.top + 10) + 'px';
+    });
+    svg.addEventListener('pointerleave', function () {
+      cross.setAttribute('visibility', 'hidden');
+      dotA.setAttribute('visibility', 'hidden');
+      dotB.setAttribute('visibility', 'hidden');
+      tip.style.display = 'none';
+    });
+
+    card.appendChild(svg);
+    return card;
+  }
+
+  function stat(k, v) {
+    return '<div><span class="k">' + k + '</span><span class="v">' + v + '</span></div>';
+  }
+</script>
+</body>
+</html>
