@@ -13,6 +13,9 @@
     }
     .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     #status { margin-top: 8px; font-size: 12px; opacity: 0.9; }
+    #remote-row { margin-top: 8px; font-size: 13px; }
+    #remote-row a { color: #8fc7ff; }
+    #remote-row b { letter-spacing: 2px; }
     #vr-btn {
       padding: 8px 16px; background: #4a90d9; color: #fff; border: none;
       border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: bold;
@@ -28,8 +31,13 @@
       <button id="load-sample">サンプル読込</button>
       <button id="vr-btn" disabled>VR非対応</button>
     </div>
+    <div class="row" id="remote-row">
+      <span id="remote-info">リモコン: 接続準備中...</span>
+    </div>
     <div id="status">Ready.</div>
   </div>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
   <script type="importmap">
   {
@@ -49,6 +57,11 @@
 
     const status = document.getElementById("status");
     const vrBtn  = document.getElementById("vr-btn");
+
+    function setStatus(text) {
+      status.textContent = text;
+      sendToRemote({ type: "status", text });
+    }
 
     // ─── Scene / Camera / Renderer ───────────────────────────────
     const scene = new THREE.Scene();
@@ -191,6 +204,16 @@
     // ─── Splat 管理 ───────────────────────────────────────────────
     let currentSplat = null;
 
+    // リモコンから操作するモデル変換（読み込み後も維持）
+    const modelTransform = { rotYDeg: 0, scale: 1, posY: 0 };
+
+    function applyModelTransform() {
+      if (!currentSplat) return;
+      currentSplat.rotation.set(Math.PI, THREE.MathUtils.degToRad(modelTransform.rotYDeg), 0);
+      currentSplat.scale.setScalar(modelTransform.scale);
+      currentSplat.position.y = modelTransform.posY;
+    }
+
     function disposeCurrentSplat() {
       if (!currentSplat) return;
       scene.remove(currentSplat);
@@ -200,22 +223,22 @@
 
     async function loadUrl(url) {
       disposeCurrentSplat();
-      status.textContent = "Loading...";
+      setStatus("Loading...");
       try {
         const splat = new SplatMesh({ url });
-        splat.rotation.x = Math.PI;
         scene.add(splat);
         currentSplat = splat;
+        applyModelTransform();
         await splat.initialized;
-        status.textContent = "Loaded ✓";
+        setStatus("Loaded ✓");
       } catch (e) {
-        status.textContent = "Error: " + (e?.message ?? e);
+        setStatus("Error: " + (e?.message ?? e));
       }
     }
 
     async function loadFile(file) {
       disposeCurrentSplat();
-      status.textContent = `Reading ${file.name}...`;
+      setStatus(`Reading ${file.name}...`);
       const ext = file.name.split('.').pop().toLowerCase();
       try {
         const fileBytes = await file.arrayBuffer();
@@ -227,13 +250,13 @@
         if (ext === "ksplat") opts.fileType = "ksplat";
         if (ext === "rad")    opts.fileType = "rad";
         const splat = new SplatMesh(opts);
-        splat.rotation.x = Math.PI;
         scene.add(splat);
         currentSplat = splat;
+        applyModelTransform();
         await splat.initialized;
-        status.textContent = "Loaded ✓";
+        setStatus("Loaded ✓");
       } catch (e) {
-        status.textContent = "Error: " + (e?.message ?? e);
+        setStatus("Error: " + (e?.message ?? e));
       }
     }
 
@@ -247,6 +270,84 @@
     document.getElementById("load-sample").addEventListener("click", () => {
       loadUrl("https://sparkjs.dev/assets/splats/butterfly.spz");
     });
+
+    // ─── リモートコントロール（PeerJS / WebRTC） ──────────────────
+    const remoteInfo = document.getElementById("remote-info");
+    const SAMPLE_URL = "https://sparkjs.dev/assets/splats/butterfly.spz";
+    const PEER_ID_PREFIX = "mochisw-gsplat-";
+    let remoteConn = null;
+
+    function sendToRemote(msg) {
+      if (remoteConn?.open) remoteConn.send(msg);
+    }
+
+    // 紛らわしい文字（0/O, 1/I）を除いた6桁コード
+    function makeRoomCode() {
+      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    }
+
+    const roomCode = makeRoomCode();
+    const peer = new Peer(PEER_ID_PREFIX + roomCode);
+
+    peer.on("open", () => {
+      const remoteUrl = new URL("remote.html", location.href);
+      remoteUrl.searchParams.set("code", roomCode);
+      remoteInfo.innerHTML =
+        `リモコンコード: <b>${roomCode}</b>　<a href="${remoteUrl.href}" target="_blank" rel="noopener">リモコンページを開く</a>`;
+    });
+
+    peer.on("error", err => {
+      remoteInfo.textContent = "リモコン: 利用不可 (" + err.type + ")";
+    });
+
+    peer.on("connection", conn => {
+      remoteConn?.close();
+      remoteConn = conn;
+      conn.on("open", () => {
+        remoteInfo.innerHTML = `リモコンコード: <b>${roomCode}</b>　✓ 接続中`;
+        conn.send({ type: "hello", transform: modelTransform, hasModel: !!currentSplat });
+        setStatus("リモコンが接続されました。");
+      });
+      conn.on("data", handleRemoteCommand);
+      conn.on("close", () => {
+        if (remoteConn === conn) remoteConn = null;
+        remoteInfo.innerHTML = `リモコンコード: <b>${roomCode}</b>　（切断されました）`;
+      });
+    });
+
+    function handleRemoteCommand(msg) {
+      if (!msg || typeof msg !== "object") return;
+      switch (msg.type) {
+        case "loadSample":
+          loadUrl(SAMPLE_URL);
+          break;
+        case "loadUrl":
+          if (typeof msg.url === "string" && /^https?:\/\//.test(msg.url)) loadUrl(msg.url);
+          else setStatus("リモコン: 不正なURLです。");
+          break;
+        case "rotY":
+          if (Number.isFinite(msg.value)) { modelTransform.rotYDeg = msg.value; applyModelTransform(); }
+          break;
+        case "scale":
+          if (Number.isFinite(msg.value) && msg.value > 0) { modelTransform.scale = msg.value; applyModelTransform(); }
+          break;
+        case "posY":
+          if (Number.isFinite(msg.value)) { modelTransform.posY = msg.value; applyModelTransform(); }
+          break;
+        case "reset":
+          modelTransform.rotYDeg = 0;
+          modelTransform.scale = 1;
+          modelTransform.posY = 0;
+          applyModelTransform();
+          camera.position.set(0, 1.6, 3);
+          controls.target.set(0, 1.0, 0);
+          controls.update();
+          sendToRemote({ type: "hello", transform: modelTransform, hasModel: !!currentSplat });
+          setStatus("リセットしました。");
+          break;
+      }
+    }
 
     // ─── リサイズ ─────────────────────────────────────────────────
     window.addEventListener("resize", () => {

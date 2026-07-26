@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3DGS Viewer リモコン</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; padding: 0; background: #111; color: #fff; font-family: system-ui, sans-serif; }
+    main { max-width: 480px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 18px; margin: 8px 0 16px; }
+    section {
+      background: rgba(255,255,255,0.06); border-radius: 12px;
+      padding: 14px; margin-bottom: 14px;
+    }
+    section h2 { font-size: 13px; margin: 0 0 10px; opacity: 0.8; font-weight: 600; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .row:last-child { margin-bottom: 0; }
+    input[type="text"], input[type="url"] {
+      flex: 1; min-width: 0; padding: 10px; border-radius: 8px; border: 1px solid #444;
+      background: #1c1c1e; color: #fff; font-size: 15px;
+    }
+    #code { text-transform: uppercase; letter-spacing: 3px; font-size: 18px; text-align: center; }
+    button {
+      padding: 10px 16px; background: #4a90d9; color: #fff; border: none;
+      border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: bold;
+    }
+    button:disabled { background: #555; cursor: not-allowed; }
+    button.wide { width: 100%; }
+    button.secondary { background: #3a3a3e; }
+    label.slider { display: block; margin-bottom: 12px; }
+    label.slider span { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+    input[type="range"] { width: 100%; }
+    #conn-status { font-size: 13px; opacity: 0.9; }
+    #viewer-status {
+      font-size: 13px; background: rgba(0,0,0,0.4); border-radius: 8px;
+      padding: 10px; min-height: 1.2em; word-break: break-all;
+    }
+    #controls { display: none; }
+    #controls.enabled { display: block; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>3DGS Viewer リモコン</h1>
+
+    <section>
+      <h2>接続</h2>
+      <div class="row">
+        <input id="code" type="text" maxlength="6" autocomplete="off"
+               placeholder="コード" inputmode="latin" />
+        <button id="connect-btn">接続</button>
+      </div>
+      <div id="conn-status">ビューアに表示されている6桁コードを入力してください。</div>
+    </section>
+
+    <div id="controls">
+      <section>
+        <h2>モデル読み込み</h2>
+        <div class="row">
+          <input id="url" type="url" placeholder="https://example.com/model.spz" />
+          <button id="load-url-btn">読込</button>
+        </div>
+        <div class="row">
+          <button id="load-sample-btn" class="wide secondary">サンプル読込</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>モデル調整</h2>
+        <label class="slider">
+          <span>回転（Y軸）<b id="rot-val">0°</b></span>
+          <input id="rot" type="range" min="-180" max="180" step="1" value="0" />
+        </label>
+        <label class="slider">
+          <span>スケール<b id="scale-val">1.00</b></span>
+          <input id="scale" type="range" min="0.1" max="3" step="0.05" value="1" />
+        </label>
+        <label class="slider">
+          <span>高さ<b id="posy-val">0.00 m</b></span>
+          <input id="posy" type="range" min="-2" max="2" step="0.05" value="0" />
+        </label>
+        <div class="row">
+          <button id="reset-btn" class="wide secondary">リセット</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>ビューアの状態</h2>
+        <div id="viewer-status">–</div>
+      </section>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script>
+    const PEER_ID_PREFIX = "mochisw-gsplat-";
+
+    const codeInput    = document.getElementById("code");
+    const connectBtn   = document.getElementById("connect-btn");
+    const connStatus   = document.getElementById("conn-status");
+    const controlsEl   = document.getElementById("controls");
+    const viewerStatus = document.getElementById("viewer-status");
+
+    const rotSlider   = document.getElementById("rot");
+    const scaleSlider = document.getElementById("scale");
+    const posySlider  = document.getElementById("posy");
+    const rotVal      = document.getElementById("rot-val");
+    const scaleVal    = document.getElementById("scale-val");
+    const posyVal     = document.getElementById("posy-val");
+
+    let peer = null;
+    let conn = null;
+
+    // ?code=XXXXXX で自動入力
+    const urlCode = new URLSearchParams(location.search).get("code");
+    if (urlCode) codeInput.value = urlCode.toUpperCase();
+
+    function setConnected(connected) {
+      controlsEl.classList.toggle("enabled", connected);
+      connectBtn.textContent = connected ? "切断" : "接続";
+      codeInput.disabled = connected;
+    }
+
+    function send(msg) {
+      if (conn?.open) conn.send(msg);
+    }
+
+    function updateSliderLabels() {
+      rotVal.textContent   = rotSlider.value + "°";
+      scaleVal.textContent = Number(scaleSlider.value).toFixed(2);
+      posyVal.textContent  = Number(posySlider.value).toFixed(2) + " m";
+    }
+
+    connectBtn.addEventListener("click", () => {
+      if (conn) { disconnect(); return; }
+      const code = codeInput.value.trim().toUpperCase();
+      if (code.length !== 6) {
+        connStatus.textContent = "6桁のコードを入力してください。";
+        return;
+      }
+      connStatus.textContent = "接続中...";
+      connectBtn.disabled = true;
+
+      peer = new Peer();
+      peer.on("open", () => {
+        conn = peer.connect(PEER_ID_PREFIX + code, { reliable: true });
+        conn.on("open", () => {
+          connectBtn.disabled = false;
+          connStatus.textContent = "✓ 接続しました。";
+          setConnected(true);
+        });
+        conn.on("data", msg => {
+          if (!msg || typeof msg !== "object") return;
+          if (msg.type === "status") {
+            viewerStatus.textContent = msg.text;
+          } else if (msg.type === "hello" && msg.transform) {
+            rotSlider.value   = msg.transform.rotYDeg;
+            scaleSlider.value = msg.transform.scale;
+            posySlider.value  = msg.transform.posY;
+            updateSliderLabels();
+          }
+        });
+        conn.on("close", () => {
+          connStatus.textContent = "切断されました。";
+          disconnect();
+        });
+      });
+      peer.on("error", err => {
+        connectBtn.disabled = false;
+        connStatus.textContent = err.type === "peer-unavailable"
+          ? "ビューアが見つかりません。コードを確認してください。"
+          : "エラー: " + err.type;
+        disconnect();
+      });
+    });
+
+    function disconnect() {
+      conn?.close();
+      conn = null;
+      peer?.destroy();
+      peer = null;
+      connectBtn.disabled = false;
+      setConnected(false);
+    }
+
+    document.getElementById("load-sample-btn").addEventListener("click", () => {
+      send({ type: "loadSample" });
+    });
+
+    document.getElementById("load-url-btn").addEventListener("click", () => {
+      const url = document.getElementById("url").value.trim();
+      if (!/^https?:\/\//.test(url)) {
+        viewerStatus.textContent = "http(s):// で始まるURLを入力してください。";
+        return;
+      }
+      send({ type: "loadUrl", url });
+    });
+
+    rotSlider.addEventListener("input", () => {
+      updateSliderLabels();
+      send({ type: "rotY", value: Number(rotSlider.value) });
+    });
+    scaleSlider.addEventListener("input", () => {
+      updateSliderLabels();
+      send({ type: "scale", value: Number(scaleSlider.value) });
+    });
+    posySlider.addEventListener("input", () => {
+      updateSliderLabels();
+      send({ type: "posY", value: Number(posySlider.value) });
+    });
+
+    document.getElementById("reset-btn").addEventListener("click", () => {
+      send({ type: "reset" });
+    });
+
+    updateSliderLabels();
+  </script>
+</body>
+</html>
