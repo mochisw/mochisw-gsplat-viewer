@@ -19,59 +19,79 @@ import numpy as np  # noqa: E402
 
 import face as facedef  # noqa: E402
 import geom  # noqa: E402
+import hair as hairmod  # noqa: E402
+import outfit  # noqa: E402
+import palette  # noqa: E402
 import rig  # noqa: E402
+import textures  # noqa: E402
 from vrm_spec import MORPH_EXPRESSIONS, all_bones  # noqa: E402
 
+MATERIAL_ORDER = palette.MATERIAL_ORDER
 
-# --- マテリアル -----------------------------------------------------------
-# 名前 -> (ベースカラー RGB, ラフネス)
-MATERIALS = {
-    "Skin":     ((1.00, 0.84, 0.76), 0.62),
-    "Hair":     ((0.24, 0.17, 0.22), 0.48),
-    "Top":      ((0.29, 0.44, 0.72), 0.72),
-    "Bottom":   ((0.19, 0.21, 0.28), 0.75),
-    "Shoes":    ((0.13, 0.13, 0.16), 0.55),
-    "EyeWhite": ((0.97, 0.97, 0.98), 0.35),
-    "Iris":     ((0.20, 0.47, 0.66), 0.28),
-    "Mouth":    ((0.42, 0.18, 0.22), 0.60),
-}
-MATERIAL_ORDER = list(MATERIALS)
-
-# 服の切り替え高さ。
-SHOES_TOP = 0.130
-SHORTS_BOTTOM = 0.700
-TOP_BOTTOM = 1.020
 NECK_LINE = 1.348
-SLEEVE_END = 0.300
 
 
 def material_for(tag, centroid):
-    """面のタグと重心位置からマテリアルを決める。"""
-    x, _, z = centroid
+    """面のタグと重心位置からマテリアルを決める。
+
+    衣装は 1 つのメッシュにまとめてあるので、切り替えはここで行う。
+    """
+    x, y, z = centroid
+
+    # 顔と肌
     if tag in ("head", "neck", "hand"):
         return "Skin"
-    if tag == "hair":
-        return "Hair"
-    if tag in ("lash", "brow"):
-        return "Hair"
     if tag == "eyeWhite":
         return "EyeWhite"
     if tag == "iris":
         return "Iris"
+    if tag == "lash":
+        return "Lash"
+    if tag == "brow":
+        return "Brow"
     if tag == "mouth":
         return "Mouth"
-    if tag == "foot":
-        return "Shoes"
+
+    # 髪と装飾
+    if tag == "hair":
+        return "Hair"
+    if tag == "droplet":
+        return "Droplet"
+    if tag == "bubble":
+        return "Bubble"
+
+    # コート: 正面のくさび形だけインナーを覗かせる
+    if tag == "coat":
+        d = outfit.front_angle(x, y)
+        if d < outfit.FRONT_OPEN:
+            return "InnerTeal" if z >= 1.20 else "Inner"
+        if d < outfit.FRONT_TRIM:
+            return "CoatTrim"
+        return "Coat"
+    if tag == "collar":
+        return "CoatTrim" if z >= 1.386 else "Coat"
+    if tag == "sleeve":
+        return "CoatTrim" if abs(x) >= outfit.CUFF_START else "Coat"
+    if tag == "coat_trim":
+        return "CoatTrim"
+    if tag == "frill":
+        return "Frill"
+    if tag == "ribbon":
+        return "Ribbon"
+
+    # 脚まわり
+    if tag == "sock":
+        return "InnerTeal" if z >= 0.395 else "Socks"
+    if tag == "shoe":
+        return "ShoeAccent" if z < 0.036 else "Shoe"
+
+    # 素体（ほとんど衣装に隠れる。覗いてもインナー色になるようにする）
     if tag == "torso":
-        if z >= NECK_LINE:
-            return "Skin"
-        return "Top" if z >= TOP_BOTTOM else "Bottom"
+        return "Skin" if z >= NECK_LINE else "Inner"
     if tag == "arm":
-        return "Top" if abs(x) < SLEEVE_END else "Skin"
+        return "Skin"
     if tag == "leg":
-        if z < SHOES_TOP:
-            return "Shoes"
-        return "Bottom" if z >= SHORTS_BOTTOM else "Skin"
+        return "Inner" if z >= outfit.COAT_HEM else "Skin"
     return "Skin"
 
 
@@ -107,60 +127,6 @@ def build_head(mb):
     verts, faces = geom.ellipsoid(rig.HEAD_CENTER, rig.HEAD_RADII,
                                   segments=28, rings=20)
     mb.add(verts, faces, "head", group="head")
-
-
-def build_hair(mb):
-    """頭部を覆う髪。後ろほど深く垂らしてボブ状のシルエットにする。"""
-    center, radii = rig.HEAD_CENTER, rig.HEAD_RADII
-    segments, rings = 28, 12
-    outer_k, inner_k = 1.052, 1.004
-    # theta_max(phi) = base + amp * sin(phi)。+Y(後頭部) で深く、-Y(顔) で浅く。
-    base_theta, amp_theta = 1.68, 0.66
-
-    def shell(k):
-        rx, ry, rz = (r * k for r in radii)
-        pts = [(center[0], center[1], center[2] + rz)]
-        for r in range(1, rings + 1):
-            for s in range(segments):
-                phi = 2.0 * math.pi * s / segments
-                theta = (base_theta + amp_theta * math.sin(phi)) * r / rings
-                st, ct = math.sin(theta), math.cos(theta)
-                pts.append((center[0] + rx * st * math.cos(phi),
-                            center[1] + ry * st * math.sin(phi),
-                            center[2] + rz * ct))
-        return pts
-
-    outer = shell(outer_k)
-    inner = shell(inner_k)
-    n_shell = len(outer)
-    verts = outer + inner
-    faces = []
-
-    def grid(base, flip):
-        f = []
-        for s in range(segments):
-            t = (s + 1) % segments
-            tri = (base, base + 1 + t, base + 1 + s)
-            f.append(tuple(reversed(tri)) if flip else tri)
-        for r in range(rings - 1):
-            a = base + 1 + r * segments
-            b = base + 1 + (r + 1) * segments
-            for s in range(segments):
-                t = (s + 1) % segments
-                quad = (a + s, a + t, b + t, b + s)
-                f.append(tuple(reversed(quad)) if flip else quad)
-        return f
-
-    faces += grid(0, flip=False)
-    faces += grid(n_shell, flip=True)
-    # 外殻と内殻の縁を繋いで厚みを閉じる。
-    rim_o = 1 + (rings - 1) * segments
-    rim_i = n_shell + rim_o
-    for s in range(segments):
-        t = (s + 1) % segments
-        faces.append((rim_o + s, rim_o + t, rim_i + t, rim_i + s))
-
-    mb.add(verts, faces, "hair", group="head")
 
 
 def build_arm(mb, side):
@@ -230,23 +196,6 @@ def build_leg(mb, side):
     mb.add(verts, faces, "leg")
 
 
-def build_foot(mb, side):
-    s = rig.side_sign(side)
-    path = [
-        (0.080 * s, 0.010, 0.080),
-        (0.080 * s, -0.010, 0.040),
-        (0.080 * s, -0.070, 0.030),
-        (0.080 * s, -0.130, 0.028),
-        (0.080 * s, -0.168, 0.026),
-    ]
-    radii = [(0.036, 0.038), (0.042, 0.035), (0.043, 0.030),
-             (0.040, 0.026), (0.028, 0.020)]
-    verts, faces = geom.tube(path, radii, segments=12)
-    # 靴底を平らにする。
-    verts = [(v[0], v[1], max(v[2], 0.006)) for v in verts]
-    mb.add(verts, faces, "foot")
-
-
 def build_face_patches(mb):
     """顔パーツを追加し、シェイプキー生成用のメタ情報を返す。"""
     patches = {}
@@ -282,36 +231,64 @@ def build_mesh_data():
     build_torso(mb)
     build_neck(mb)
     build_head(mb)
-    build_hair(mb)
     for side in ("left", "right"):
         build_arm(mb, side)
         build_hand(mb, side)
         build_leg(mb, side)
-        build_foot(mb, side)
+    hairmod.build(mb)
+    outfit.build(mb)
     patches = build_face_patches(mb)
     return mb, patches
 
 
 # --- Blender オブジェクト化 ------------------------------------------------
 
-def make_materials():
+def make_materials(texture_paths):
     mats = []
     for name in MATERIAL_ORDER:
-        color, roughness = MATERIALS[name]
+        spec = palette.MATERIALS[name]
         mat = bpy.data.materials.new(name)
         mat.use_nodes = True
-        bsdf = mat.node_tree.nodes.get("Principled BSDF")
-        if bsdf:
-            bsdf.inputs["Base Color"].default_value = (*color, 1.0)
-            bsdf.inputs["Roughness"].default_value = roughness
-            if "Metallic" in bsdf.inputs:
-                bsdf.inputs["Metallic"].default_value = 0.0
-        mat.diffuse_color = (*color, 1.0)
+        tree = mat.node_tree
+        bsdf = tree.nodes.get("Principled BSDF")
+        if bsdf is None:
+            mats.append(mat)
+            continue
+
+        bsdf.inputs["Base Color"].default_value = (*spec.base, 1.0)
+        bsdf.inputs["Roughness"].default_value = spec.roughness
+        if "Metallic" in bsdf.inputs:
+            bsdf.inputs["Metallic"].default_value = 0.0
+
+        if spec.emissive and "Emission Color" in bsdf.inputs:
+            bsdf.inputs["Emission Color"].default_value = (*spec.emissive, 1.0)
+            if "Emission Strength" in bsdf.inputs:
+                bsdf.inputs["Emission Strength"].default_value = \
+                    spec.emissive_strength
+
+        if spec.texture:
+            node = image_node(tree, texture_paths[spec.texture], (-420, 240))
+            tree.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
+        if spec.emissive_texture and "Emission Color" in bsdf.inputs:
+            node = image_node(tree, texture_paths[spec.emissive_texture],
+                              (-420, -120))
+            tree.links.new(node.outputs["Color"], bsdf.inputs["Emission Color"])
+
+        mat.diffuse_color = (*spec.base, 1.0)
         mats.append(mat)
     return mats
 
 
-def create_mesh_object(mb):
+def image_node(tree, path, location):
+    node = tree.nodes.new("ShaderNodeTexImage")
+    node.location = location
+    node.image = bpy.data.images.load(path, check_existing=True)
+    node.interpolation = 'Linear'
+    node.extension = 'EXTEND'
+    return node
+
+
+def create_mesh_object(mb, texture_paths):
     mesh = bpy.data.meshes.new("AvatarMesh")
     mesh.from_pydata(mb.verts, [], [f for f, _ in mb.faces])
     mesh.update()
@@ -319,7 +296,11 @@ def create_mesh_object(mb):
     obj = bpy.data.objects.new("Avatar", mesh)
     bpy.context.collection.objects.link(obj)
 
-    for mat in make_materials():
+    uv_layer = mesh.uv_layers.new(name="UVMap")
+    for loop in mesh.loops:
+        uv_layer.data[loop.index].uv = mb.uvs[loop.vertex_index]
+
+    for mat in make_materials(texture_paths):
         mesh.materials.append(mat)
     index_of = {name: i for i, name in enumerate(MATERIAL_ORDER)}
     for poly, (indices, tag) in zip(mesh.polygons, mb.faces):
@@ -532,20 +513,34 @@ def export_glb(path):
     )
 
 
+def assemble(texture_dir):
+    """メッシュ・リグ・スキニング・シェイプキーまでを組み上げる。
+
+    preview.py からも呼ぶので main() から切り出してある。
+    """
+    texture_paths = textures.generate(texture_dir)
+    mb, patches = build_mesh_data()
+    obj = create_mesh_object(mb, texture_paths)
+    arm_obj = create_armature()
+    apply_skinning(obj, mb, arm_obj)
+    created = add_shape_keys(obj, patches)
+    return mb, obj, arm_obj, created
+
+
 def main():
     parser = argparse.ArgumentParser(description="VRM 用アバターの GLB を生成する")
     parser.add_argument("--out", default="build/avatar.glb")
+    parser.add_argument("--texture-dir", default=None,
+                        help="生成テクスチャの置き場（既定は出力先の textures/）")
     parser.add_argument("--save-blend", default=None,
                         help="デバッグ用に .blend も保存する")
     args, _ = parser.parse_known_args(argv_after_dashes())
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    mb, patches = build_mesh_data()
-    obj = create_mesh_object(mb)
-    arm_obj = create_armature()
-    apply_skinning(obj, mb, arm_obj)
-    created = add_shape_keys(obj, patches)
+    texture_dir = args.texture_dir or os.path.join(
+        os.path.dirname(os.path.abspath(args.out)), "textures")
+    mb, obj, arm_obj, created = assemble(texture_dir)
 
     export_glb(args.out)
     if args.save_blend:

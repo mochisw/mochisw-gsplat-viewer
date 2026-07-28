@@ -14,8 +14,8 @@ import math
 #   curve  : 上向きの反り
 #   offset : 頭部表面からの浮かせ量（描画順の制御を兼ねる）
 BASE = {
-    "brow":     dict(cx=0.041, cz=1.5475, rx=0.026, rz=0.0042, rot=0.10, curve=0.004, offset=0.0030),
-    "lash":     dict(cx=0.041, cz=1.5175, rx=0.032, rz=0.0090, rot=0.0, curve=0.009, offset=0.0038),
+    "brow":     dict(cx=0.041, cz=1.5495, rx=0.024, rz=0.0030, rot=0.10, curve=0.004, offset=0.0030),
+    "lash":     dict(cx=0.041, cz=1.5205, rx=0.031, rz=0.0058, rot=0.0, curve=0.008, offset=0.0038),
     "eyeWhite": dict(cx=0.041, cz=1.492, rx=0.029, rz=0.027, rot=0.0, curve=0.0, offset=0.0022),
     "iris":     dict(cx=0.041, cz=1.4905, rx=0.0195, rz=0.0235, rot=0.0, curve=0.0, offset=0.0032),
     "mouth":    dict(cx=0.0, cz=1.424, rx=0.021, rz=0.0035, rot=0.0, curve=0.002, offset=0.0022),

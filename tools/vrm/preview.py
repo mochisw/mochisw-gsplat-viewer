@@ -72,6 +72,33 @@ def shot(cam, path, location, rotation, ortho_scale, res=(480, 720)):
     return path
 
 
+# 主要な関節を一通り曲げる確認用ポーズ。(ボーン名, X, Y, Z) の度数。
+TEST_POSE = [
+    ("leftUpperArm", 0, 0, -62), ("rightUpperArm", 0, 0, 62),
+    ("leftLowerArm", -55, 0, 0), ("rightLowerArm", -55, 0, 0),
+    ("leftUpperLeg", -35, 0, 0), ("rightUpperLeg", -10, 0, 0),
+    ("leftLowerLeg", 65, 0, 0), ("rightLowerLeg", 20, 0, 0),
+    ("neck", 12, 0, 18), ("head", 0, 0, 14),
+    ("spine", -8, 0, 0), ("chest", 0, 0, 6),
+]
+
+
+def apply_test_pose(arm):
+    for name, rx, ry, rz in TEST_POSE:
+        bone = arm.pose.bones.get(name)
+        if bone is None:
+            continue
+        bone.rotation_mode = 'XYZ'
+        bone.rotation_euler = (math.radians(rx), math.radians(ry),
+                               math.radians(rz))
+
+
+def clear_pose(arm):
+    for bone in arm.pose.bones:
+        bone.rotation_euler = (0.0, 0.0, 0.0)
+        bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="build/preview")
@@ -82,11 +109,7 @@ def main():
     os.makedirs(outdir, exist_ok=True)
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    mb, patches = ba.build_mesh_data()
-    obj = ba.create_mesh_object(mb)
-    arm = ba.create_armature()
-    ba.apply_skinning(obj, mb, arm)
-    ba.add_shape_keys(obj, patches)
+    mb, obj, arm, _ = ba.assemble(os.path.join(outdir, "textures"))
     arm.hide_viewport = True
     arm.hide_render = True
 
@@ -110,6 +133,14 @@ def main():
          (math.pi / 2, 0, 0), 0.30, res=(480, 480))
     shot(cam, f"{outdir}/hand.png", (0.66, -0.6, 1.313),
          (math.pi / 2, 0, 0), 0.26, res=(480, 480))
+
+    # ポーズを付けた状態。スキニングの破綻はここでしか出ないので必ず出力する。
+    apply_test_pose(arm)
+    shot(cam, f"{outdir}/pose_front.png", (0, -4, mid + 0.04),
+         (math.pi / 2, 0, 0), 1.95)
+    shot(cam, f"{outdir}/pose_three_quarter.png",
+         (-2.6, -3.0, mid + 0.35), (math.radians(83), 0, math.radians(-41)), 1.95)
+    clear_pose(arm)
 
     # 表情ごとの顔アップ。
     keys = obj.data.shape_keys.key_blocks

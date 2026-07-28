@@ -90,24 +90,63 @@ def loft(sections, cap_start=True, cap_end=True):
     return verts, faces
 
 
-def tube(path, radii, segments=12, cap_start=True, cap_end=True):
-    """折れ線 path に沿って半径 radii のチューブを作る。
+def rotate_about(v, axis, cos_a, sin_a):
+    """ロドリゲスの回転公式。axis は単位ベクトル。"""
+    return add(add(scale(v, cos_a), scale(cross(axis, v), sin_a)),
+               scale(axis, dot(axis, v) * (1.0 - cos_a)))
 
-    各節点でのリング法線は前後のセグメント方向の平均にして、
-    関節部分が潰れないようにする。
-    """
-    if len(path) != len(radii):
-        raise ValueError("tube: path と radii の長さが違います")
-    sections = []
-    for i, p in enumerate(path):
+
+def path_tangents(path):
+    """折れ線の各節点での進行方向。関節では前後の平均を取る。"""
+    n = len(path)
+    tangents = []
+    for i in range(n):
         if i == 0:
             axis = sub(path[1], path[0])
-        elif i == len(path) - 1:
+        elif i == n - 1:
             axis = sub(path[-1], path[-2])
         else:
             axis = add(normalize(sub(path[i], path[i - 1])),
                        normalize(sub(path[i + 1], path[i])))
-        u, v = basis_from_axis(axis)
+        tangents.append(normalize(axis))
+    return tangents
+
+
+def parallel_frames(path):
+    """折れ線に沿って捻れない正規直交フレーム (u, v) を求める。
+
+    節点ごとに basis_from_axis() を独立に呼ぶと、進行方向が参照軸の
+    切り替え閾値をまたいだ瞬間に基底が不連続に反転し、チューブが
+    ねじれて板状に潰れたりギザギザになる。前の点のフレームを
+    「今の接線へ最小回転で運ぶ」ことで、その不連続を無くす。
+    """
+    tangents = path_tangents(path)
+    u, _ = basis_from_axis(tangents[0])
+    frames = []
+    for i, t in enumerate(tangents):
+        if i > 0:
+            prev = tangents[i - 1]
+            axis = cross(prev, t)
+            sin_a = length(axis)
+            cos_a = dot(prev, t)
+            if sin_a > 1e-9:
+                u = rotate_about(u, scale(axis, 1.0 / sin_a), cos_a, sin_a)
+        # 数値誤差で接線から外れるので毎回直交化しておく。
+        u = sub(u, scale(t, dot(u, t)))
+        n = length(u)
+        u = basis_from_axis(t)[0] if n < 1e-9 else scale(u, 1.0 / n)
+        frames.append((u, cross(t, u)))
+    return frames
+
+
+def tube(path, radii, segments=12, cap_start=True, cap_end=True):
+    """折れ線 path に沿って半径 radii のチューブを作る。"""
+    if len(path) != len(radii):
+        raise ValueError("tube: path と radii の長さが違います")
+    frames = parallel_frames(path)
+    sections = []
+    for i, p in enumerate(path):
+        u, v = frames[i]
         r = radii[i]
         ru, rv = (r, r) if isinstance(r, (int, float)) else r
         sections.append(ring(p, u, v, ru, rv, segments))
@@ -210,17 +249,34 @@ def fan_faces(segments):
 
 # --- メッシュ組み立て -----------------------------------------------------
 
+def tube_uvs(sections, segments, v_values=None):
+    """tube() が返す頂点並びに対応する UV を作る。
+
+    u はリング方向、v はパス方向。v_values を渡すと毛先グラデーション等に使える。
+    """
+    if v_values is None:
+        v_values = [i / max(1, sections - 1) for i in range(sections)]
+    return [(s / segments, v_values[r])
+            for r in range(sections) for s in range(segments)]
+
+
 class MeshBuilder:
     """複数パーツを 1 つのメッシュに統合し、面ごとのタグを保持する。"""
 
     def __init__(self):
         self.verts = []
+        self.uvs = []        # verts と 1 対 1
         self.faces = []      # (indices, tag)
         self.groups = {}     # name -> [vertex index]
 
-    def add(self, verts, faces, tag, group=None):
+    def add(self, verts, faces, tag, group=None, uvs=None):
         off = len(self.verts)
         self.verts.extend(verts)
+        if uvs is None:
+            uvs = [(0.5, 0.5)] * len(verts)
+        elif len(uvs) != len(verts):
+            raise ValueError(f"UV 数 {len(uvs)} が頂点数 {len(verts)} と一致しません")
+        self.uvs.extend(uvs)
         for f in faces:
             self.faces.append((tuple(i + off for i in f), tag))
         idx = list(range(off, off + len(verts)))
@@ -228,11 +284,11 @@ class MeshBuilder:
             self.groups.setdefault(group, []).extend(idx)
         return off
 
-    def add_mirrored(self, verts, faces, tag, group=None):
+    def add_mirrored(self, verts, faces, tag, group=None, uvs=None):
         """X 反転したコピーを追加する。面の巻き方向も反転させる。"""
         mv = [(-v[0], v[1], v[2]) for v in verts]
         mf = [tuple(reversed(f)) for f in faces]
-        return self.add(mv, mf, tag, group)
+        return self.add(mv, mf, tag, group, uvs)
 
     def adjacency(self):
         """頂点隣接リスト（ウェイトのスムージングで使う）。"""
