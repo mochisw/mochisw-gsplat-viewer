@@ -1,0 +1,14 @@
+{
+  "name": "mochisw-gsplat-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "3D Gaussian Splatting viewer for Quest 3, and a procedural VRM avatar pipeline",
+  "scripts": {
+    "test:vrm": "node tools/vrm/compat_test.mjs assets/avatar.vrm"
+  },
+  "devDependencies": {
+    "@pixiv/three-vrm": "^3.4.4",
+    "playwright": "^1.62.0",
+    "three": "^0.182.0"
+  }
+}
