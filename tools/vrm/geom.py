@@ -112,16 +112,24 @@ def path_tangents(path):
     return tangents
 
 
-def parallel_frames(path):
+def parallel_frames(path, u0=None):
     """折れ線に沿って捻れない正規直交フレーム (u, v) を求める。
 
     節点ごとに basis_from_axis() を独立に呼ぶと、進行方向が参照軸の
     切り替え閾値をまたいだ瞬間に基底が不連続に反転し、チューブが
     ねじれて板状に潰れたりギザギザになる。前の点のフレームを
     「今の接線へ最小回転で運ぶ」ことで、その不連続を無くす。
+
+    u0 を渡すと最初のフレームの向きを指定できる（ヘアカードの面の向き等）。
     """
     tangents = path_tangents(path)
-    u, _ = basis_from_axis(tangents[0])
+    if u0 is not None:
+        t0 = tangents[0]
+        u = sub(u0, scale(t0, dot(u0, t0)))
+        n = length(u)
+        u = basis_from_axis(t0)[0] if n < 1e-9 else scale(u, 1.0 / n)
+    else:
+        u, _ = basis_from_axis(tangents[0])
     frames = []
     for i, t in enumerate(tangents):
         if i > 0:
@@ -151,6 +159,43 @@ def tube(path, radii, segments=12, cap_start=True, cap_end=True):
         ru, rv = (r, r) if isinstance(r, (int, float)) else r
         sections.append(ring(p, u, v, ru, rv, segments))
     return loft(sections, cap_start, cap_end)
+
+
+def ribbon(path, widths, u0=None, fold=0.16, v_values=None):
+    """折れ線 path に沿ったヘアカード（3 レールの帯）を作る。
+
+    widths : 各節点での帯の幅
+    u0     : 幅方向の初期向き（省略時は自動）
+    fold   : 幅に対する中央レールの盛り上がり比。カードに丸みを付ける
+
+    戻り値は (verts, faces, uvs)。UV は u=幅方向 0..1 / v=長さ方向。
+    """
+    if len(path) != len(widths):
+        raise ValueError("ribbon: path と widths の長さが違います")
+    n = len(path)
+    frames = parallel_frames(path, u0)
+    tangents = path_tangents(path)
+    if v_values is None:
+        v_values = [i / (n - 1) for i in range(n)]
+
+    verts, uvs = [], []
+    for i, p in enumerate(path):
+        u, _ = frames[i]
+        normal = cross(tangents[i], u)
+        half = widths[i] * 0.5
+        bump = widths[i] * fold
+        verts.append(add(p, scale(u, -half)))
+        verts.append(add(p, scale(normal, bump)))
+        verts.append(add(p, scale(u, half)))
+        v = v_values[i]
+        uvs.extend([(0.0, v), (0.5, v), (1.0, v)])
+
+    faces = []
+    for i in range(n - 1):
+        a, b = i * 3, (i + 1) * 3
+        faces.append((a, a + 1, b + 1, b))
+        faces.append((a + 1, a + 2, b + 2, b + 1))
+    return verts, faces, uvs
 
 
 def vertical_profile(profile, segments=16):

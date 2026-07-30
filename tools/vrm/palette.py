@@ -53,20 +53,25 @@ GLOW_SUB = 0.30       # (5) ライトアクア(補助ハイライト)
 class Material:
     """1 マテリアルの見た目定義。
 
-    base      : ベースカラー(リニア)
-    roughness : 粗さ。指定書の質感（パール/グロス/サテン/マット）に対応させる
-    emissive  : 発光色(リニア)。None なら発光しない
-    texture   : ベースカラーに貼るテクスチャのキー（palette.TEXTURES）
+    base         : ベースカラー(リニア)
+    roughness    : 粗さ。指定書の質感（パール/グロス/サテン/マット）に対応させる
+    emissive     : 発光色(リニア)。None なら発光しない
+    texture      : ベースカラーに貼るテクスチャのキー（textures.generate の辞書キー）
+    alpha        : None / 'MASK' / 'BLEND'。テクスチャのアルファを使う
+    double_sided : 板ポリ（髪カード・睫毛など）は True
     """
 
     def __init__(self, base, roughness, emissive=None, emissive_strength=1.0,
-                 texture=None, emissive_texture=None):
+                 texture=None, emissive_texture=None, alpha=None,
+                 double_sided=False):
         self.base = base
         self.roughness = roughness
         self.emissive = emissive
         self.emissive_strength = emissive_strength
         self.texture = texture
         self.emissive_texture = emissive_texture
+        self.alpha = alpha
+        self.double_sided = double_sided
 
 
 def glow(code, level):
@@ -85,21 +90,26 @@ R_TRANSLUCENT = 0.18  # トランスレセント: スプラッシュ装飾・髪
 # --- マテリアル一覧 -------------------------------------------------------
 # 名前は build_avatar.py の面タグから引かれる。
 MATERIALS = {
-    # 肌と顔
+    # 肌と顔。顔パーツはテクスチャが本体（色はテクスチャに焼いてある）
     "Skin":      Material(linear(SKIN), 0.68),
-    "EyeWhite":  Material(linear(EYE_WHITE), 0.30),
-    "Iris":      Material(linear(GLOW_CYAN), 0.15,
-                          emissive=glow(GLOW_CYAN, 0.22)),
-    "Lash":      Material(linear(FACE_BLACK), 0.55),
-    "Brow":      Material(mix(GLOW_CYAN, DEEP_NAVY, 0.45), 0.55),
+    "EyeWhite":  Material((1.0, 1.0, 1.0), 0.30, texture="eye_white"),
+    "Iris":      Material((1.0, 1.0, 1.0), 0.15, texture="iris",
+                          emissive=glow(GLOW_CYAN, 0.10)),
+    "Lash":      Material((1.0, 1.0, 1.0), 0.55, texture="lash",
+                          alpha="MASK", double_sided=True),
+    "Brow":      Material((1.0, 1.0, 1.0), 0.55, texture="brow",
+                          alpha="MASK", double_sided=True),
+    "Blush":     Material((1.0, 1.0, 1.0), 0.70, texture="blush",
+                          alpha="BLEND", double_sided=True),
     "Mouth":     Material(linear(MOUTH), 0.55),
 
-    # 髪: 根元シアン -> 毛先パープルのグラデーションをテクスチャで表現する
-    "Hair":      Material(linear(GLOW_CYAN), R_PEARL,
+    # 髪: 根元シアン -> 毛先パープル + 毛先アルファのヘアカード
+    "Hair":      Material((1.0, 1.0, 1.0), R_PEARL,
                           emissive=(1.0, 1.0, 1.0),
                           emissive_strength=1.0,
                           texture="hair_base",
-                          emissive_texture="hair_glow"),
+                          emissive_texture="hair_glow",
+                          alpha="MASK", double_sided=True),
 
     # 頭上パーツ・水滴オーナメント（最も明るい発光）
     "Droplet":   Material(linear(GLOW_CYAN), R_TRANSLUCENT,
@@ -108,8 +118,9 @@ MATERIALS = {
     "Bubble":    Material(linear(LIGHT_AQUA), R_GLOSS,
                           emissive=glow(GLOW_PURPLE, GLOW_MEDIUM)),
 
-    # コート（パールコート）とその柄・ハイライト
-    "Coat":      Material(linear(PEARL_WHITE), R_PEARL),
+    # コート（パールコート）。本体はバブル柄テクスチャ、袖は無地
+    "Coat":      Material((1.0, 1.0, 1.0), R_PEARL, texture="coat"),
+    "Sleeve":    Material(linear(PEARL_WHITE), R_PEARL),
     "CoatTrim":  Material(linear(EMERALD), R_PEARL,
                           emissive=glow(EMERALD, GLOW_MEDIUM)),
     "CoatAqua":  Material(linear(LIGHT_AQUA), R_PEARL,

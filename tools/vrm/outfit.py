@@ -53,8 +53,14 @@ COAT_PROFILE = [
 
 
 def build_coat(mb):
-    verts, faces = geom.vertical_profile(COAT_PROFILE, segments=24)
-    mb.add(verts, faces, "coat")
+    segments = 24
+    verts, faces = geom.vertical_profile(COAT_PROFILE, segments=segments)
+    # 円筒 UV。u はリング方向、v は裾(0) → 襟(1)。バブル柄テクスチャは
+    # 画像下端が裾になるように描かれている。
+    n_rings = len(COAT_PROFILE)
+    uvs = [(s / segments, 1.0 - r / (n_rings - 1))
+           for r in range(n_rings) for s in range(segments)]
+    mb.add(verts, faces, "coat", uvs=uvs)
 
 
 def build_frill(mb):

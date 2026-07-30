@@ -67,6 +67,8 @@ window.__run = async (url) => {
     skinnedMeshes: meshes.length,
     morphCount: meshes[0].morphTargetInfluences.length,
     materialTypes: [],
+    springJoints: vrm.springBoneManager ? [...vrm.springBoneManager.joints].length : 0,
+    springColliders: vrm.springBoneManager ? [...vrm.springBoneManager.colliders].length : 0,
     mtoonMaterials: 0,
     texturedMaterials: 0,
     emissiveMaterials: 0,
@@ -190,6 +192,7 @@ try {
   console.log('  テクスチャ付き    :', r.texturedMaterials);
   console.log('  発光あり          :', r.emissiveMaterials);
   console.log('  blink で動く morph:', r.blinkDrivesMorphs);
+  console.log('  springBone joints :', r.springJoints, '/ colliders:', r.springColliders);
   console.log('  描画              :',
     r.renderedWithoutError ? `OK (シェーダ ${r.programCount} 本)` : 'NG');
 
@@ -208,6 +211,7 @@ try {
   check(r.hasThumbnail, 'サムネイルが読み込めない');
   check(r.texturedMaterials > 0, 'テクスチャ付きマテリアルが無い');
   check(r.emissiveMaterials > 0, '発光マテリアルが 1 つも無い');
+  check(r.springJoints > 0, 'springBone が読み込まれていない');
   check(r.renderedWithoutError, '描画に失敗した');
 } catch (err) {
   failures.push(`例外: ${err.message}`);

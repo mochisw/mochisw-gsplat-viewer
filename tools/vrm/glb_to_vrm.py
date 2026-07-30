@@ -15,6 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import palette  # noqa: E402
 import rig  # noqa: E402
 from vrm_spec import MORPH_EXPRESSIONS, REQUIRED_BONES, all_bones  # noqa: E402
 
@@ -24,6 +25,10 @@ CHUNK_BIN = 0x004E4942
 
 VRM_EXT = "VRMC_vrm"
 MTOON_EXT = "VRMC_materials_mtoon"
+SPRING_EXT = "VRMC_springBone"
+
+# 揺れ骨チェーンのボーン名接頭辞（hair.py と揃える）。
+SPRING_PREFIX = "sp_"
 
 
 # --- GLB の読み書き -------------------------------------------------------
@@ -220,6 +225,10 @@ def build_first_person(mesh_node):
 def apply_mtoon(gltf, outline_width):
     """各マテリアルにトゥーンシェーダ設定を足す。"""
     for material in gltf.get("materials", []):
+        spec = palette.MATERIALS.get(material.get("name"))
+        # アルファ抜きの板ポリ（髪・睫毛など）に輪郭線を付けると
+        # 抜いた形の外周ではなく板の外周に線が出るので無効にする。
+        width = 0.0 if (spec and spec.alpha) else outline_width
         pbr = material.setdefault("pbrMetallicRoughness", {})
         base = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
         rgb = base[:3]
@@ -245,12 +254,91 @@ def apply_mtoon(gltf, outline_width):
             "parametricRimFresnelPowerFactor": 5.0,
             "parametricRimLiftFactor": 0.0,
             "rimLightingMixFactor": 1.0,
-            "outlineWidthMode": "worldCoordinates" if outline_width > 0 else "none",
-            "outlineWidthFactor": outline_width,
+            "outlineWidthMode": "worldCoordinates" if width > 0 else "none",
+            "outlineWidthFactor": width,
             "outlineColorFactor": outline_color,
             "outlineLightingMixFactor": 1.0,
         }
     return len(gltf.get("materials", []))
+
+
+def apply_alpha_modes(gltf):
+    """palette の定義に従って alphaMode / doubleSided を書き込む。
+
+    Blender の書き出しはアルファリンクを BLEND にしがちなので、
+    最終的なモードはここで palette を単一の情報源として確定させる。
+    """
+    for material in gltf.get("materials", []):
+        spec = palette.MATERIALS.get(material.get("name"))
+        if spec is None:
+            continue
+        if spec.alpha:
+            material["alphaMode"] = spec.alpha
+            if spec.alpha == "MASK":
+                material["alphaCutoff"] = 0.5
+        else:
+            material["alphaMode"] = "OPAQUE"
+            material.pop("alphaCutoff", None)
+        if spec.double_sided:
+            material["doubleSided"] = True
+
+
+# --- springBone -------------------------------------------------------------
+
+def build_spring_bone(gltf, nodes_by_name):
+    """sp_* ボーンから VRMC_springBone 拡張を組み立てる。
+
+    チェーンは sp_<名前>_<番号> の連番ノード。番号順に 1 本のスプリングになる。
+    見つからなければ None（揺れもの無しのモデルとして成立させる）。
+    """
+    chains = {}
+    for name, index in nodes_by_name.items():
+        if not name.startswith(SPRING_PREFIX):
+            continue
+        chain, _, seq = name.rpartition("_")
+        try:
+            chains.setdefault(chain, []).append((int(seq), index))
+        except ValueError:
+            continue
+    if not chains:
+        return None
+
+    # 髪が体をすり抜けないよう、頭と胸に球コライダを置く。
+    # オフセットは Blender 座標の差分を glTF 系 (x, z, -y) に直したもの。
+    colliders = [
+        {"node": nodes_by_name["head"],
+         "shape": {"sphere": {"offset": [0.0, 0.075, -0.008], "radius": 0.11}}},
+        {"node": nodes_by_name["chest"],
+         "shape": {"sphere": {"offset": [0.0, 0.10, 0.0], "radius": 0.13}}},
+    ]
+    collider_groups = [{"name": "body", "colliders": [0, 1]}]
+
+    # 根元は硬く、毛先ほど柔らかく。
+    stiffness = [1.1, 0.9, 0.7, 0.5]
+    springs = []
+    for chain in sorted(chains):
+        joints = []
+        for seq, node in sorted(chains[chain]):
+            joints.append({
+                "node": node,
+                "hitRadius": 0.02,
+                "stiffness": stiffness[min(seq, len(stiffness) - 1)],
+                "gravityPower": 0.05,
+                "gravityDir": [0.0, -1.0, 0.0],
+                "dragForce": 0.4,
+            })
+        springs.append({
+            "name": chain,
+            "joints": joints,
+            "colliderGroups": [0],
+        })
+
+    return {
+        "specVersion": "1.0",
+        "colliders": colliders,
+        "colliderGroups": collider_groups,
+        "springs": springs,
+    }
 
 
 # --- サムネイル -----------------------------------------------------------
@@ -311,12 +399,21 @@ def convert(args):
         if name not in used:
             used.append(name)
 
+    spring = build_spring_bone(gltf, nodes_by_name)
+    if spring is not None:
+        gltf["extensions"][SPRING_EXT] = spring
+        if SPRING_EXT not in used:
+            used.append(SPRING_EXT)
+
     material_count = apply_mtoon(gltf, args.outline_width)
+    apply_alpha_modes(gltf)
     size = write_glb(args.output, gltf, binary)
 
+    spring_note = (f"揺れ骨 {len(spring['springs'])} 本" if spring
+                   else "揺れ骨なし")
     print(f"[glb_to_vrm] ボーン {len(humanoid['humanBones'])} / "
           f"表情 {len(vrm['expressions']['preset'])} / "
-          f"マテリアル {material_count}")
+          f"マテリアル {material_count} / {spring_note}")
     if missing:
         print(f"[glb_to_vrm] 未割当の任意ボーン: {', '.join(missing)}")
     print(f"[glb_to_vrm] 出力: {args.output} ({size / 1024:.0f} KiB)")

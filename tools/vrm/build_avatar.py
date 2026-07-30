@@ -49,6 +49,8 @@ def material_for(tag, centroid):
         return "Lash"
     if tag == "brow":
         return "Brow"
+    if tag == "blush":
+        return "Blush"
     if tag == "mouth":
         return "Mouth"
 
@@ -71,7 +73,8 @@ def material_for(tag, centroid):
     if tag == "collar":
         return "CoatTrim" if z >= 1.386 else "Coat"
     if tag == "sleeve":
-        return "CoatTrim" if abs(x) >= outfit.CUFF_START else "Coat"
+        # 袖はバブル柄を貼らない無地パール（UV が無いため）
+        return "CoatTrim" if abs(x) >= outfit.CUFF_START else "Sleeve"
     if tag == "coat_trim":
         return "CoatTrim"
     if tag == "frill":
@@ -202,11 +205,17 @@ def build_face_patches(mb):
     seg = facedef.SEGMENTS
     faces = geom.fan_faces(seg)
 
+    # 扇形パッチの UV: 単位円 → テクスチャの内接円。
+    # リングの i 番目は角度 2πi/seg、最後の頂点が中心。
+    patch_uvs = [(0.5 + 0.5 * math.cos(2.0 * math.pi * i / seg),
+                  0.5 + 0.5 * math.sin(2.0 * math.pi * i / seg))
+                 for i in range(seg)] + [(0.5, 0.5)]
+
     def emit(name, side):
         params = facedef.patch_params(name, side)
         verts = patch_verts(params)
         group = f"{name}_{side}"
-        start = mb.add(verts, faces, name, group=group)
+        start = mb.add(verts, faces, name, group=group, uvs=patch_uvs)
         patches[(name, side)] = start
 
     for name in facedef.SIDED:
@@ -269,11 +278,17 @@ def make_materials(texture_paths):
         if spec.texture:
             node = image_node(tree, texture_paths[spec.texture], (-420, 240))
             tree.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
+            # アルファ付きマテリアルはテクスチャのアルファを透過に繋ぐ。
+            # 最終的な alphaMode/alphaCutoff は glb_to_vrm が JSON を直接
+            # 書き換えるので、ここではリンクだけしておけばよい。
+            if spec.alpha and "Alpha" in bsdf.inputs:
+                tree.links.new(node.outputs["Alpha"], bsdf.inputs["Alpha"])
         if spec.emissive_texture and "Emission Color" in bsdf.inputs:
             node = image_node(tree, texture_paths[spec.emissive_texture],
                               (-420, -120))
             tree.links.new(node.outputs["Color"], bsdf.inputs["Emission Color"])
 
+        mat.use_backface_culling = not spec.double_sided
         mat.diffuse_color = (*spec.base, 1.0)
         mats.append(mat)
     return mats
@@ -335,7 +350,18 @@ def mark_sharp_edges(mesh, threshold):
     bm.free()
 
 
-def create_armature():
+def chain_bone_names(chain):
+    """揺れ骨チェーン 1 本分のボーン名（葉ボーン込み）。"""
+    return [f"{chain}_{i}" for i in range(4)]
+
+
+def create_armature(chains=None):
+    """ヒューマノイドボーンと、springBone 用の揺れ骨チェーンを組む。
+
+    chains: {チェーン名: [ジョイント座標 4 点]}。各チェーンは
+    joint0-1, 1-2, 2-3 の 3 本 + 末端の葉ボーンの計 4 本になる。
+    葉ボーンは springBone の末端ジョイントとして必要。
+    """
     arm_data = bpy.data.armatures.new("AvatarArmature")
     arm_obj = bpy.data.objects.new("Armature", arm_data)
     bpy.context.collection.objects.link(arm_obj)
@@ -361,6 +387,21 @@ def create_armature():
             bone.use_connect = (
                 geom.length(geom.sub(bone.head, created[parent].tail)) < 1e-6
             )
+
+    for chain, joints in (chains or {}).items():
+        parent = created["head"]
+        for i, name in enumerate(chain_bone_names(chain)):
+            if i < 3:
+                head, tail = joints[i], joints[i + 1]
+            else:
+                head = joints[3]
+                tail = geom.add(joints[3], (0.0, 0.0, -0.03))
+            bone = arm_data.edit_bones.new(name)
+            bone.head, bone.tail = head, tail
+            bone.parent = parent
+            bone.use_connect = i > 0
+            created[name] = bone
+            parent = bone
 
     bpy.ops.object.mode_set(mode='OBJECT')
     return arm_obj
@@ -402,7 +443,9 @@ def segment_distances(points, segments):
 def compute_weights(mb, bone_names, positions):
     """距離の逆数ベースでウェイトを作り、隣接頂点で平滑化する。"""
     points = np.array(mb.verts, dtype=np.float64)
-    auto_names = [n for n in bone_names if n not in AUTO_WEIGHT_EXCLUDE]
+    # 揺れ骨チェーン(positions に無い)と目は自動ウェイトの対象外。
+    auto_names = [n for n in bone_names
+                  if n not in AUTO_WEIGHT_EXCLUDE and n in positions]
     segments = np.array([[positions[n][0], positions[n][1]] for n in auto_names],
                         dtype=np.float64)
 
@@ -437,8 +480,30 @@ def compute_weights(mb, bone_names, positions):
     return auto_names, trimmed
 
 
-def apply_skinning(obj, mb, arm_obj):
+def chain_vertex_weights(v):
+    """房に沿った位置 v (0=根元, 1=毛先) から揺れ骨 3 本の重みを返す。
+
+    チェーンは 3 セグメント。v をセグメント位置に割り、隣接ボーンと
+    線形ブレンドしてスキニングの折れを防ぐ。
+    """
+    p = min(max(v, 0.0), 1.0) * 3.0
+    i = min(int(p), 2)
+    frac = p - i
+    if i >= 2:
+        return {2: 1.0} if frac >= 1.0 else {1: 0.0, 2: 1.0}
+    out = {i: 1.0 - frac}
+    if frac > 1e-4:
+        out[i + 1] = frac
+    return {k: w for k, w in out.items() if w > 1e-4}
+
+
+def apply_skinning(obj, mb, arm_obj, chains=None, strand_chains=None):
+    chains = chains or {}
+    strand_chains = strand_chains or {}
+
     bone_names = [name for name, _ in all_bones()]
+    for chain in chains:
+        bone_names += chain_bone_names(chain)
     positions = rig.bone_positions()
 
     groups = {name: obj.vertex_groups.new(name=name) for name in bone_names}
@@ -451,6 +516,17 @@ def apply_skinning(obj, mb, arm_obj):
         if not indices:
             continue
         groups[bone].add(indices, 1.0, 'REPLACE')
+        forced[np.array(indices, dtype=np.int64)] = True
+
+    # 揺れ髪の房: UV の v（根元 0 → 毛先 1）でチェーンボーンに割り付ける。
+    for group_name, chain in strand_chains.items():
+        indices = mb.groups.get(group_name)
+        if not indices or chain not in chains:
+            continue
+        bones = chain_bone_names(chain)
+        for i in indices:
+            for j, w in chain_vertex_weights(mb.uvs[i][1]).items():
+                groups[bones[j]].add([i], w, 'REPLACE')
         forced[np.array(indices, dtype=np.int64)] = True
 
     for b, name in enumerate(auto_names):
@@ -521,8 +597,10 @@ def assemble(texture_dir):
     texture_paths = textures.generate(texture_dir)
     mb, patches = build_mesh_data()
     obj = create_mesh_object(mb, texture_paths)
-    arm_obj = create_armature()
-    apply_skinning(obj, mb, arm_obj)
+    arm_obj = create_armature(chains=hairmod.CHAINS)
+    apply_skinning(obj, mb, arm_obj,
+                   chains=hairmod.CHAINS,
+                   strand_chains=hairmod.STRAND_CHAINS)
     created = add_shape_keys(obj, patches)
     return mb, obj, arm_obj, created
 
