@@ -1,0 +1,30 @@
+{
+  "status": "frozen-for-ar-validation",
+  "format": "backhoe-rig-action-v1",
+  "requiredTopLevel": ["format","frames"],
+  "playbackFields": ["t","turntable","boom","arm","bucket"],
+  "frameUnits": {
+    "t":"seconds from action start",
+    "turntable":"degrees relative to scan pose",
+    "boom":"degrees relative to scan pose",
+    "arm":"degrees relative to scan pose",
+    "bucket":"degrees relative to scan pose"
+  },
+  "semantics": {
+    "scanPose":"0 degrees for every joint",
+    "cameraStateIncluded":false,
+    "worldPlacementIncluded":false,
+    "arScaleIncluded":false,
+    "arYawIncluded":false,
+    "interpolation":"linear between adjacent keyframes; AR implementation should use shortest-path angle interpolation for turntable when crossing +/-180 degrees",
+    "rangeHandling":"clamp each joint to rig_config limits on load"
+  },
+  "currentRigRangesDeg": {
+    "turntable":[-180,180],
+    "boom":[-20,40],
+    "arm":[-35,45],
+    "bucket":[-60,45]
+  },
+  "validatedOn":"2026-10-04",
+  "validationSample":"backhoe_excavation_sample_v1.json"
+}

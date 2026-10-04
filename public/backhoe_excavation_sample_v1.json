@@ -1,0 +1,23 @@
+{
+  "format": "backhoe-rig-action-v1",
+  "createdAt": "2026-10-04T00:00:00.000Z",
+  "source": "backhoe 2.spz",
+  "name": "Generic excavation cycle - AR validation sample",
+  "description": "掘削→巻込み→持上げ→小旋回→排土→初期姿勢へ戻る。split v3のvisual-safe可動域内で作成。",
+  "frames": [
+    {"t":0.0,"turntable":0,"boom":0,"arm":0,"bucket":0},
+    {"t":1.0,"turntable":0,"boom":-6,"arm":-12,"bucket":-18},
+    {"t":2.2,"turntable":0,"boom":-12,"arm":-24,"bucket":-34},
+    {"t":3.4,"turntable":0,"boom":-13,"arm":-18,"bucket":-8},
+    {"t":4.6,"turntable":0,"boom":-9,"arm":-2,"bucket":22},
+    {"t":5.8,"turntable":0,"boom":2,"arm":13,"bucket":34},
+    {"t":7.0,"turntable":18,"boom":12,"arm":16,"bucket":36},
+    {"t":8.2,"turntable":38,"boom":18,"arm":10,"bucket":34},
+    {"t":9.4,"turntable":48,"boom":18,"arm":-2,"bucket":18},
+    {"t":10.4,"turntable":48,"boom":14,"arm":-12,"bucket":-18},
+    {"t":11.3,"turntable":48,"boom":12,"arm":-14,"bucket":-42},
+    {"t":12.5,"turntable":28,"boom":10,"arm":-8,"bucket":-25},
+    {"t":13.8,"turntable":8,"boom":5,"arm":-4,"bucket":-10},
+    {"t":15.0,"turntable":0,"boom":0,"arm":0,"bucket":0}
+  ]
+}

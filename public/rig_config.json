@@ -1,0 +1,35 @@
+{
+  "version": "backhoe-rig-ar-v0.1.2",
+  "source": "backhoe 2.spz",
+  "coordinateSystem": "SPZ RUB (+X right, +Y up, +Z back)",
+  "notes": "split v3 test: whole-machine ground removal, corrected slew pivot, visual-safe joint ranges",
+  "pivots": {
+    "turntable": [-0.12,-0.74,-1.15],
+    "boom": [-0.19,0.18,-0.6],
+    "arm": [0.365,0.34,0.8],
+    "bucket": [0.765,-0.54,1.84]
+  },
+  "joints": {
+    "turntable": {"axis":[0,1,0],"minDeg":-180,"maxDeg":180,"defaultDeg":0},
+    "boom": {"axis":[1,0,0],"minDeg":-20,"maxDeg":40,"defaultDeg":0},
+    "arm": {"axis":[1,0,0],"minDeg":-35,"maxDeg":45,"defaultDeg":0},
+    "bucket": {"axis":[1,0,0],"minDeg":-60,"maxDeg":45,"defaultDeg":0}
+  },
+  "parts": {
+    "ground": "assets/01_ground.spz",
+    "lower": "assets/02_lower.spz",
+    "upper": "assets/03_upper.spz",
+    "boom": "assets/04_boom.spz",
+    "arm": "assets/05_arm.spz",
+    "bucket": "assets/06_bucket.spz"
+  },
+  "ar": {
+    "sourceMaxDimensionM": 4.33544921875,
+    "defaultDisplayedMaxDimensionM": 1.0,
+    "defaultScale": 0.230656605,
+    "minScale": 0.05,
+    "maxScale": 3.0,
+    "baseY": -1.325927734375,
+    "centerXZ": [0.03955078125,0.028564453125]
+  }
+}
