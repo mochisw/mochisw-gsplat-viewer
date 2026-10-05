@@ -1,0 +1,23 @@
+{
+  "imagePath": "image-targets/takumi-card_luminance.jpg",
+  "metadata": null,
+  "name": "takumi-card",
+  "type": "PLANAR",
+  "properties": {
+    "left": 0,
+    "top": 0,
+    "width": 540,
+    "height": 720,
+    "isRotated": false,
+    "originalWidth": 540,
+    "originalHeight": 720
+  },
+  "resources": {
+    "originalImage": "takumi-card_original.jpg",
+    "croppedImage": "takumi-card_cropped.jpg",
+    "thumbnailImage": "takumi-card_thumbnail.jpg",
+    "luminanceImage": "takumi-card_luminance.jpg"
+  },
+  "created": 1791179771785,
+  "updated": 1791179771785
+}
