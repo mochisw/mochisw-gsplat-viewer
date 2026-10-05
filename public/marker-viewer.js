@@ -22,7 +22,7 @@ export async function mountMarker(checkpoint, targetName) {
     markerRoot.quaternion.copy(last.rotation);
     markerRoot.scale.setScalar(last.scale);
     // Relative sizing: about 15 cm for an assumed 55 mm card width.
-    const localWidth = last.scaledWidth / last.scale;
+    const localWidth = last.scaledWidth;
     modelRoot.scale.setScalar(localWidth * (150 / 55) / span);
     markerRoot.visible = ready && tracked;
   };
