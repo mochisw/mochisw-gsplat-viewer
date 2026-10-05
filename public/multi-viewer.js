@@ -42,7 +42,30 @@ export async function mountSixStatic(checkpoint){
 
   const root=new THREE.Group();
   root.scale.setScalar(0.23);
+  root.visible=false;
   scene.add(root);
+
+  const showBtn=document.getElementById('showModel');
+  const recenterBtn=document.getElementById('recenter');
+  const groundBtn=document.getElementById('ground');
+  let groundMesh=null;
+
+  const placeInFront=()=>{
+    const forward=new THREE.Vector3(0,-0.35,-2.0).applyQuaternion(camera.quaternion);
+    root.position.copy(camera.position).add(forward);
+    root.quaternion.identity();
+    root.visible=true;
+    checkpoint('model visible');
+  };
+
+  showBtn?.addEventListener('click',placeInFront);
+  recenterBtn?.addEventListener('click',placeInFront);
+  groundBtn?.addEventListener('click',()=>{
+    if(!groundMesh)return;
+    groundMesh.visible=!groundMesh.visible;
+    groundBtn.textContent='地面 '+(groundMesh.visible?'ON':'OFF');
+    groundBtn.classList.toggle('on',groundMesh.visible);
+  });
 
   // Split-v3 SPZs retain the original scan coordinate system,
   // so zero local transforms reconstruct the static machine.
@@ -50,12 +73,13 @@ export async function mountSixStatic(checkpoint){
     const [label,url]=PARTS[i];
     checkpoint('loading '+(i+1)+'/6: '+label);
     const mesh=await loadSplat(url,checkpoint,label);
+    if(label==='ground') groundMesh=mesh;
     root.add(mesh);
   }
 
-  // Place the reconstructed static set in front of the current AR camera.
-  const forward=new THREE.Vector3(0,-0.35,-2.0).applyQuaternion(camera.quaternion);
-  root.position.copy(camera.position).add(forward);
-
   checkpoint('6/6 static ready');
+  showBtn.disabled=false;
+  recenterBtn.disabled=false;
+  groundBtn.disabled=false;
+  document.body.classList.add('ready');
 }
