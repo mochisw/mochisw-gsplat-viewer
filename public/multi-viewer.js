@@ -10,22 +10,39 @@ const PARTS=[
   ['bucket','/assets/06_bucket.spz'],
 ];
 
-function loadSplat(url,checkpoint,label){
+async function loadSplat(url,checkpoint,label,index){
+  checkpoint('fetch '+index+'/6: '+label);
+  const response=await fetch(url,{cache:'no-store'});
+  checkpoint('HTTP '+response.status+': '+label);
+  if(!response.ok) throw new Error(label+' HTTP '+response.status);
+
+  const buffer=await response.arrayBuffer();
+  checkpoint(label+' bytes: '+buffer.byteLength);
+  if(buffer.byteLength<64) throw new Error(label+' asset too small: '+buffer.byteLength+' bytes');
+
   return new Promise((resolve,reject)=>{
     let settled=false;
     const timeout=setTimeout(()=>{
       if(settled)return;
       settled=true;
-      reject(new Error(label+' load timeout 20s'));
-    },20000);
+      reject(new Error(label+' decode timeout 30s'));
+    },30000);
 
+    checkpoint('decode '+index+'/6: '+label);
     const mesh=new SplatMesh({
-      url,
+      fileBytes:new Uint8Array(buffer),
+      fileName:label+'.spz',
+      onProgress:e=>{
+        if(e?.total>0){
+          const pct=Math.round((e.loaded/e.total)*100);
+          if(pct===25||pct===50||pct===75) checkpoint('decode '+label+': '+pct+'%');
+        }
+      },
       onLoad:()=>{
         if(settled)return;
         settled=true;
         clearTimeout(timeout);
-        checkpoint('loaded: '+label);
+        checkpoint('loaded '+index+'/6: '+label);
         resolve(mesh);
       }
     });
@@ -72,7 +89,7 @@ export async function mountSixStatic(checkpoint){
   for(let i=0;i<PARTS.length;i++){
     const [label,url]=PARTS[i];
     checkpoint('loading '+(i+1)+'/6: '+label);
-    const mesh=await loadSplat(url,checkpoint,label);
+    const mesh=await loadSplat(url,checkpoint,label,i+1);
     if(label==='ground') groundMesh=mesh;
     root.add(mesh);
   }
