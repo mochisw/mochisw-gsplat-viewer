@@ -2,15 +2,17 @@ import * as THREE from 'three';
 import {SparkRenderer,SplatMesh} from '@sparkjsdev/spark';
 
 const PARTS=[
-  ['ground','/assets/01_ground.spz'],
-  ['lower','/assets/02_lower.spz'],
+  // Start with upper because B2 already proved this asset can load.
+  // Ground is intentionally last so we can tell if that specific asset is the blocker.
   ['upper','/assets/03_upper.spz'],
+  ['lower','/assets/02_lower.spz'],
   ['boom','/assets/04_boom.spz'],
   ['arm','/assets/05_arm.spz'],
   ['bucket','/assets/06_bucket.spz'],
+  ['ground','/assets/01_ground.spz'],
 ];
 
-async function loadSplat(url,checkpoint,label,index){
+async function loadSplat(url,checkpoint,label,index,parent){
   checkpoint('fetch '+index+'/6: '+label);
   const response=await fetch(url,{cache:'no-store'});
   checkpoint('HTTP '+response.status+': '+label);
@@ -46,6 +48,10 @@ async function loadSplat(url,checkpoint,label,index){
         resolve(mesh);
       }
     });
+
+    // Match Spark's documented pattern: add SplatMesh to the scene graph
+    // immediately, instead of waiting for onLoad before attaching it.
+    parent.add(mesh);
   });
 }
 
@@ -89,9 +95,8 @@ export async function mountSixStatic(checkpoint){
   for(let i=0;i<PARTS.length;i++){
     const [label,url]=PARTS[i];
     checkpoint('loading '+(i+1)+'/6: '+label);
-    const mesh=await loadSplat(url,checkpoint,label,i+1);
+    const mesh=await loadSplat(url,checkpoint,label,i+1,root);
     if(label==='ground') groundMesh=mesh;
-    root.add(mesh);
   }
 
   checkpoint('6/6 static ready');
